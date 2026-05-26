@@ -23,7 +23,9 @@ import {
   Coins,
   Mail,
   Lock,
-  AlertCircle
+  AlertCircle,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -130,6 +132,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleGoogleLogin = async () => {
     setAuthError('');
@@ -185,7 +188,7 @@ export default function App() {
           throw new Error('Por favor ingrese su correo electrónico.');
         }
         await resetPassword(cleanedEmail);
-        setAuthSuccess('Hemos enviado un correo electrónico para restablecer tu contraseña a ' + cleanedEmail + '. Revisa tu bandeja de entrada o carpeta de spam.');
+        setAuthSuccess('¡Enlace enviado! Hemos enviado un correo para restablecer tu contraseña a ' + cleanedEmail + '. IMPORTANTE: Si no lo ves en tu bandeja principal, por favor REVISA LA CARPETA DE CORREO NO DESEADO / SPAM. (Si te registraste con el botón de Google, el correo no llegará ya que accedes directamente sin contraseña).');
         setAuthMode('login');
       }
     } catch (err: any) {
@@ -313,7 +316,10 @@ export default function App() {
             {authMode === 'forgot' && (
               <div className="space-y-1.5 text-left border rounded-2xl p-4 bg-zinc-50 border-zinc-200">
                 <span className="text-[10px] font-black text-red-800 uppercase tracking-widest block">Recuperar Acceso</span>
-                <p className="text-[11px] text-zinc-500 font-medium">Ingrese su correo de registro y le enviaremos de inmediato un enlace para redefinir su contraseña de forma segura.</p>
+                <p className="text-[11px] text-zinc-500 font-medium">Ingrese su correo de registro y le enviaremos un enlace oficial de Firebase para restablecer su contraseña de inmediato.</p>
+                <p className="text-[10px] text-amber-700 font-bold bg-amber-50 rounded-lg p-2 mt-1">
+                  💡 NOTA: Los correos automáticos de Firebase a veces son filtrados y van directo a la carpeta de <strong>SPAM / CORREO NO DESEADO</strong>. ¡Búscalo allí si no lo ves en tu bandeja de entrada!
+                </p>
               </div>
             )}
 
@@ -370,13 +376,21 @@ export default function App() {
                 <div className="relative">
                   <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                   <input
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     required
                     placeholder="******"
                     value={authPassword}
                     onChange={(e) => setAuthPassword(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 hover:bg-zinc-100/50 focus:bg-white rounded-2xl text-xs font-semibold outline-none focus:ring-1 focus:ring-red-800 transition-all text-zinc-800"
+                    className="w-full pl-10 pr-10 py-3 bg-zinc-50 border border-zinc-200 hover:bg-zinc-100/50 focus:bg-white rounded-2xl text-xs font-semibold outline-none focus:ring-1 focus:ring-red-800 transition-all text-zinc-800"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 focus:outline-none"
+                    title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                  >
+                    {showPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
+                  </button>
                 </div>
                 {authMode === 'register' && (
                   <span className="text-[10px] text-zinc-500 font-bold block ml-1.5 mt-1">

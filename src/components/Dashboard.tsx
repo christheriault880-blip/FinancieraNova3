@@ -16,21 +16,50 @@ import {
   XAxis, 
   YAxis, 
   CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer 
+  Tooltip
 } from 'recharts';
 import { formatCurrency, cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
 import { analyzeExpenses } from '../services/geminiService';
 import { deleteTransaction, subscribeToInventory } from '../services/firestoreService';
 import { AIInsight, InventoryItem } from '../types';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 export default function Dashboard() {
   const { profile, transactions, goals, user } = useAuth();
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  
+  // Custom ResizeObserver logic to prevent ResponsiveContainer unmounting crashes
+  const [chartWidth, setChartWidth] = useState<number>(0);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
+    
+    // Set initial size
+    const initialWidth = chartContainerRef.current.getBoundingClientRect().width;
+    if (initialWidth > 0) {
+      setChartWidth(initialWidth);
+    } else {
+      setChartWidth(500); // stable fallback representation
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      if (!Array.isArray(entries) || !entries.length) return;
+      const entry = entries[0];
+      const width = entry.contentRect.width;
+      if (width > 0) {
+        setChartWidth(width);
+      }
+    });
+
+    observer.observe(chartContainerRef.current);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const handleDelete = async (id: string) => {
     if (!user) return;
@@ -181,9 +210,9 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-6">
               <h3 className="font-bold text-zinc-900">Gastos de la Semana</h3>
             </div>
-            <div className="h-[300px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={weeklyData}>
+            <div ref={chartContainerRef} className="h-[300px] w-full relative">
+              {chartWidth > 0 ? (
+                <AreaChart width={chartWidth} height={300} data={weeklyData}>
                   <defs>
                     <linearGradient id="colorAmount" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#991b1b" stopOpacity={0.1}/>
@@ -217,7 +246,11 @@ export default function Dashboard() {
                     fill="url(#colorAmount)" 
                   />
                 </AreaChart>
-              </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-full w-full">
+                  <span className="text-xs text-zinc-400">Cargando gráfico...</span>
+                </div>
+              )}
             </div>
           </div>
 
