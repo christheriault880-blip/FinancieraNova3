@@ -147,6 +147,9 @@ export default function App() {
         if (!authUsername.trim()) {
           throw new Error('Por favor ingrese un nombre de usuario.');
         }
+        if (authPassword.length < 6) {
+          throw new Error('La contraseña debe tener al menos 6 caracteres. Firebase no permite registrar contraseñas más cortas por seguridad.');
+        }
         await registerWithEmail(authEmail, authUsername.trim(), authPassword);
         setAuthSuccess('¡Cuenta registrada exitosamente! Se ha enviado un correo con un enlace de verificación a ' + authEmail + '. Por favor, revise su correo.');
       } else if (authMode === 'forgot') {
@@ -170,6 +173,8 @@ export default function App() {
           friendlyMessage = 'La contraseña debe tener al menos 6 caracteres.';
         } else if (msg.includes('auth/invalid-email')) {
           friendlyMessage = 'El formato de correo electrónico ingresado no es válido.';
+        } else if (msg.includes('auth/operation-not-allowed')) {
+          friendlyMessage = 'El registro con Correo/Contraseña está desactivado en tu proyecto Firebase. Actívalo en tu Firebase Console: ve a Authentication -> Sign-in Method -> Agregar nuevo proveedor -> selecciona "Correo electrónico/contraseña" y actívalo para que empiece a funcionar en la web.';
         } else {
           friendlyMessage = msg;
         }
@@ -344,6 +349,11 @@ export default function App() {
                     className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 hover:bg-zinc-100/50 focus:bg-white rounded-2xl text-xs font-semibold outline-none focus:ring-1 focus:ring-red-800 transition-all text-zinc-800"
                   />
                 </div>
+                {authMode === 'register' && (
+                  <span className="text-[10px] text-zinc-500 font-bold block ml-1.5 mt-1">
+                    * Mínimo 6 caracteres (Requerido por Firebase)
+                  </span>
+                )}
               </div>
             )}
 
