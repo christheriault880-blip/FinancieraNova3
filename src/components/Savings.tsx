@@ -29,7 +29,7 @@ const goalIcons: Record<string, any> = {
 export default function Savings() {
   const { user, goals, profile } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [newGoal, setNewGoal] = useState({ name: '', targetAmount: 0, icon: 'Target' });
+  const [newGoal, setNewGoal] = useState({ name: '', targetAmount: 0, icon: 'Target', deadline: '' });
 
   // Funding Modal States
   const [fundingGoal, setFundingGoal] = useState<SavingGoal | null>(null);
@@ -45,7 +45,7 @@ export default function Savings() {
       currentAmount: 0,
     });
     setIsModalOpen(false);
-    setNewGoal({ name: '', targetAmount: 0, icon: 'Target' });
+    setNewGoal({ name: '', targetAmount: 0, icon: 'Target', deadline: '' });
   };
 
   const handleDeleteGoal = async (goalId: string) => {
@@ -185,9 +185,23 @@ export default function Savings() {
                           style={{ width: `${Math.min(100, progress)}%` }}
                         />
                       </div>
-                      <div className="flex justify-between items-center text-[10px] text-zinc-400 font-bold uppercase tracking-widest">
-                        <span>Progreso</span>
-                        <span>{formatCurrency(Math.max(0, goal.targetAmount - goal.currentAmount))} restantes</span>
+                      <div className="flex justify-between items-start pt-1 text-xs gap-4">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-zinc-400 font-bold block uppercase tracking-wider">Cuánto le falta</span>
+                          <span className="text-zinc-850 font-black">
+                            {goal.currentAmount >= goal.targetAmount 
+                              ? '¡Meta alcanzada!' 
+                              : formatCurrency(Math.max(0, goal.targetAmount - goal.currentAmount))}
+                          </span>
+                        </div>
+                        <div className="flex flex-col text-right">
+                          <span className="text-[10px] text-zinc-400 font-bold block uppercase tracking-wider">Fecha estimada</span>
+                          <span className="text-zinc-800 font-bold text-xs">
+                            {goal.deadline 
+                              ? new Date(goal.deadline + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' }) 
+                              : 'No definida'}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -296,6 +310,15 @@ export default function Savings() {
                   className="w-full px-4 py-3 bg-zinc-100 border-none rounded-2xl text-sm focus:ring-2 focus:ring-red-800 outline-none"
                   value={newGoal.targetAmount || ''}
                   onChange={e => setNewGoal({...newGoal, targetAmount: Number(e.target.value)})}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Fecha Estimada de Cumplimiento</label>
+                <input 
+                  type="date" 
+                  className="w-full px-4 py-3 bg-zinc-100 border-none rounded-2xl text-sm focus:ring-2 focus:ring-red-800 outline-none text-zinc-800 font-semibold"
+                  value={newGoal.deadline || ''}
+                  onChange={e => setNewGoal({...newGoal, deadline: e.target.value})}
                 />
               </div>
               <div>

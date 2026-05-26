@@ -46,8 +46,10 @@ import Billing from './components/Billing';
 import Agenda from './components/Agenda';
 import NotificationsPopover from './components/NotificationsPopover';
 import Loans from './components/Loans';
+import PaymentReminders from './components/PaymentReminders';
+import { BellRing } from 'lucide-react';
 
-type Tab = 'dashboard' | 'transactions' | 'savings' | 'ai' | 'profile' | 'admin' | 'inventory' | 'billing' | 'agenda' | 'loans';
+type Tab = 'dashboard' | 'transactions' | 'savings' | 'ai' | 'profile' | 'admin' | 'inventory' | 'billing' | 'agenda' | 'loans' | 'reminders';
 
 const categories: Category[] = ['Comida', 'Transporte', 'Ocio', 'Vivienda', 'Salud', 'Suscripciones', 'Otros'];
 
@@ -226,6 +228,7 @@ export default function App() {
     { id: 'inventory', label: 'Inventario', icon: Boxes },
     { id: 'billing', label: 'Facturas', icon: FileText },
     { id: 'agenda', label: 'Agenda', icon: Calendar },
+    { id: 'reminders', label: 'Recordatorios', icon: BellRing },
     { id: 'ai', label: 'IA Assistant', icon: MessageSquareText },
     { id: 'profile', label: 'Perfil', icon: UserIcon },
   ];
@@ -542,6 +545,7 @@ export default function App() {
               {activeTab === 'inventory' && <Inventory />}
               {activeTab === 'billing' && <Billing />}
               {activeTab === 'agenda' && <Agenda />}
+              {activeTab === 'reminders' && <PaymentReminders />}
               {activeTab === 'ai' && <AIChat />}
               {activeTab === 'profile' && <Profile />}
               {activeTab === 'admin' && <AdminPanel />}
