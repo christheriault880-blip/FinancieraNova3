@@ -20,12 +20,15 @@ import {
   Boxes,
   FileText,
   Calendar,
-  Coins
+  Coins,
+  Mail,
+  Lock,
+  AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import { useAuth } from './AuthContext';
-import { loginWithGoogle } from './firebase';
+import { loginWithGoogle, registerWithEmail, loginWithEmail, resetPassword, sendVerification } from './firebase';
 import { addTransaction } from './services/firestoreService';
 import { Category } from './types';
 
@@ -119,6 +122,64 @@ export default function App() {
     type: 'expense' as 'income' | 'expense'
   });
 
+  // Authentication states
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authUsername, setAuthUsername] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+    setAuthLoading(true);
+    try {
+      if (authMode === 'login') {
+        const loggedUser = await loginWithEmail(authEmail, authPassword);
+        if (loggedUser && !loggedUser.emailVerified) {
+          // Soft success info that they might want to verify, but we let them log in
+          setAuthSuccess('¡Sesión iniciada! Nota: Tu correo electrónico no ha sido verificado aún. Revisa tu bandeja de entrada o haz clic en verificar correo en tu perfil.');
+        }
+      } else if (authMode === 'register') {
+        if (!authUsername.trim()) {
+          throw new Error('Por favor ingrese un nombre de usuario.');
+        }
+        await registerWithEmail(authEmail, authUsername.trim(), authPassword);
+        setAuthSuccess('¡Cuenta registrada exitosamente! Se ha enviado un correo con un enlace de verificación a ' + authEmail + '. Por favor, revise su correo.');
+      } else if (authMode === 'forgot') {
+        if (!authEmail.trim()) {
+          throw new Error('Por favor ingrese su correo electrónico.');
+        }
+        await resetPassword(authEmail.trim());
+        setAuthSuccess('Hemos enviado un correo electrónico para restablecer tu contraseña a ' + authEmail + '. Revisa tu bandeja de entrada o carpeta de spam.');
+        setAuthMode('login');
+      }
+    } catch (err: any) {
+      console.error(err);
+      let friendlyMessage = 'Ocurrió un error inesperado al intentar realizar la operación.';
+      if (err instanceof Error) {
+        const msg = err.message;
+        if (msg.includes('auth/invalid-credential') || msg.includes('auth/wrong-password') || msg.includes('auth/user-not-found')) {
+          friendlyMessage = 'Credenciales incorrectas o cuenta inexistente. Verifique su correo y contraseña.';
+        } else if (msg.includes('auth/email-already-in-use')) {
+          friendlyMessage = 'Este correo electrónico ya está registrado. Intente iniciar sesión o use "Olvidé mi contraseña".';
+        } else if (msg.includes('auth/weak-password')) {
+          friendlyMessage = 'La contraseña debe tener al menos 6 caracteres.';
+        } else if (msg.includes('auth/invalid-email')) {
+          friendlyMessage = 'El formato de correo electrónico ingresado no es válido.';
+        } else {
+          friendlyMessage = msg;
+        }
+      }
+      setAuthError(friendlyMessage);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   const navItems = [
     { id: 'dashboard', label: 'Inicio', icon: LayoutDashboard },
     { id: 'loans', label: 'Préstamos', icon: Coins },
@@ -156,23 +217,188 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6">
-        <div className="max-w-md w-full glass-card p-10 text-center space-y-8">
-          <div className="w-32 h-32 mx-auto">
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4 sm:p-6 select-none">
+        <div className="max-w-md w-full glass-card p-6 sm:p-10 text-center space-y-6 bg-white border border-zinc-150 rounded-3xl shadow-xl">
+          <div className="w-24 h-24 sm:w-28 sm:h-28 mx-auto">
             <Logo className="w-full h-full" />
           </div>
-          <div className="space-y-2">
-            <h1 className="text-3xl font-bold text-zinc-900 tracking-tight">Financiera Nova</h1>
-            <p className="text-zinc-500">Tu asistente financiero inteligente para impulsar tu futuro.</p>
+          
+          <div className="space-y-1.5">
+            <h1 className="text-2xl sm:text-3xl font-black text-zinc-900 tracking-tight">Financiera Nova</h1>
+            <p className="text-zinc-500 text-xs sm:text-sm">Tu asistente financiero inteligente para impulsar tu futuro.</p>
           </div>
+
+          {/* Tab switches */}
+          <div className="flex bg-zinc-100 p-1 rounded-2xl">
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('login');
+                setAuthError('');
+                setAuthSuccess('');
+              }}
+              className={cn(
+                "flex-1 py-1.5 sm:py-2 rounded-xl text-xs font-black transition-all",
+                authMode === 'login' ? "bg-white text-zinc-950 shadow-sm" : "text-zinc-500 hover:text-zinc-800"
+              )}
+            >
+              Iniciar Sesión
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('register');
+                setAuthError('');
+                setAuthSuccess('');
+              }}
+              className={cn(
+                "flex-1 py-1.5 sm:py-2 rounded-xl text-xs font-black transition-all",
+                authMode === 'register' ? "bg-white text-red-800 shadow-sm" : "text-zinc-500 hover:text-zinc-800"
+              )}
+            >
+              Registrarse
+            </button>
+          </div>
+
+          {authError && (
+            <div className="flex items-start gap-2 text-left bg-red-50 border border-red-150 text-red-800 p-3.5 rounded-2xl text-[11px] font-semibold animate-pulse">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          {authSuccess && (
+            <div className="flex items-start gap-2 text-left bg-emerald-50 border border-emerald-150 text-emerald-800 p-3.5 rounded-2xl text-[11px] font-semibold">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+              <span>{authSuccess}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleAuthSubmit} className="space-y-4">
+            {authMode === 'forgot' && (
+              <div className="space-y-1.5 text-left border rounded-2xl p-4 bg-zinc-50 border-zinc-200">
+                <span className="text-[10px] font-black text-red-800 uppercase tracking-widest block">Recuperar Acceso</span>
+                <p className="text-[11px] text-zinc-500 font-medium">Ingrese su correo de registro y le enviaremos de inmediato un enlace para redefinir su contraseña de forma segura.</p>
+              </div>
+            )}
+
+            {authMode === 'register' && (
+              <div className="text-left space-y-1">
+                <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block ml-1">Nombre de Usuario</label>
+                <div className="relative">
+                  <UserIcon className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej: chris_nova"
+                    value={authUsername}
+                    onChange={(e) => setAuthUsername(e.target.value)}
+                    className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 hover:bg-zinc-100/50 focus:bg-white rounded-2xl text-xs font-semibold outline-none focus:ring-1 focus:ring-red-800 transition-all text-zinc-800"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="text-left space-y-1">
+              <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block ml-1">Correo Electrónico</label>
+              <div className="relative">
+                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                <input
+                  type="email"
+                  required
+                  placeholder="usuario@financieranova.com"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 hover:bg-zinc-100/50 focus:bg-white rounded-2xl text-xs font-semibold outline-none focus:ring-1 focus:ring-red-800 transition-all text-zinc-800"
+                />
+              </div>
+            </div>
+
+            {authMode !== 'forgot' && (
+              <div className="text-left space-y-1">
+                <div className="flex justify-between items-center px-1">
+                  <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest block">Contraseña</label>
+                  {authMode === 'login' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode('forgot');
+                        setAuthError('');
+                        setAuthSuccess('');
+                      }}
+                      className="text-[10px] font-bold text-red-800 hover:underline transition-all"
+                    >
+                      ¿Olvidó su contraseña?
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    placeholder="******"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    className="w-full pl-10 pr-4 py-3 bg-zinc-50 border border-zinc-200 hover:bg-zinc-100/50 focus:bg-white rounded-2xl text-xs font-semibold outline-none focus:ring-1 focus:ring-red-800 transition-all text-zinc-800"
+                  />
+                </div>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full flex items-center justify-center gap-2 py-3.5 bg-red-800 hover:bg-red-900 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-red-100 disabled:opacity-50"
+            >
+              {authLoading ? (
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+              ) : (
+                <>
+                  <LogIn className="w-4 h-4" />
+                  {authMode === 'login' ? 'Iniciar Sesión' : authMode === 'register' ? 'Crear Cuenta' : 'Recuperar Contraseña'}
+                </>
+              )}
+            </button>
+
+            {authMode === 'forgot' && (
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError('');
+                    setAuthSuccess('');
+                  }}
+                  className="text-xs font-semibold text-zinc-500 hover:text-zinc-800 transition-colors"
+                >
+                  &larr; Volver al Inicio de Sesión
+                </button>
+              </div>
+            )}
+          </form>
+
+          <div className="relative flex py-2 items-center">
+            <div className="flex-grow border-t border-zinc-150"></div>
+            <span className="flex-shrink mx-4 text-[10px] text-zinc-450 font-extrabold uppercase tracking-widest">O continúa con</span>
+            <div className="flex-grow border-t border-zinc-150"></div>
+          </div>
+
           <button 
+            type="button"
             onClick={loginWithGoogle}
-            className="w-full flex items-center justify-center gap-3 py-4 bg-white border border-zinc-200 rounded-2xl font-bold text-zinc-700 hover:bg-zinc-50 transition-all shadow-sm"
+            className="w-full flex items-center justify-center gap-3 py-3 bg-white border border-zinc-200 rounded-2xl font-bold text-zinc-700 hover:bg-zinc-50 transition-all shadow-sm text-xs"
           >
-            <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" referrerPolicy="no-referrer" />
-            Continuar con Google
+            <img src="https://www.google.com/favicon.ico" alt="Google" className="w-4 h-4" referrerPolicy="no-referrer" />
+            Acceder con Google
           </button>
-          <p className="text-[10px] text-zinc-400 uppercase tracking-widest font-bold">Seguridad Bancaria • Encriptación AES-256</p>
+
+          <div className="pt-2">
+            <p className="text-[9px] text-zinc-450 uppercase tracking-widest font-black flex items-center justify-center gap-1.5">
+              <span>Seguridad Bancaria • Encriptación AES-256</span>
+            </p>
+          </div>
         </div>
       </div>
     );

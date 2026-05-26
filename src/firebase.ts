@@ -1,5 +1,15 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
+import { 
+  getAuth, 
+  GoogleAuthProvider, 
+  signInWithPopup, 
+  signOut,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+  sendEmailVerification,
+  sendPasswordResetEmail
+} from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -26,6 +36,54 @@ export const loginWithGoogle = async () => {
     return result.user;
   } catch (error) {
     console.error("Error signing in with Google:", error);
+    throw error;
+  }
+};
+
+export const registerWithEmail = async (email: string, username: string, password: string) => {
+  try {
+    const result = await createUserWithEmailAndPassword(auth, email, password);
+    if (result.user) {
+      await updateProfile(result.user, { displayName: username });
+      try {
+        await sendEmailVerification(result.user);
+      } catch (verificationError) {
+        console.warn("Failed to send initial auto verification email:", verificationError);
+      }
+    }
+    return result.user;
+  } catch (error) {
+    console.error("Error creating user with email and password:", error);
+    throw error;
+  }
+};
+
+export const loginWithEmail = async (email: string, password: string) => {
+  try {
+    const result = await signInWithEmailAndPassword(auth, email, password);
+    return result.user;
+  } catch (error) {
+    console.error("Error logging in with email and password:", error);
+    throw error;
+  }
+};
+
+export const resetPassword = async (email: string) => {
+  try {
+    await sendPasswordResetEmail(auth, email);
+  } catch (error) {
+    console.error("Error sending password reset email:", error);
+    throw error;
+  }
+};
+
+export const sendVerification = async (user: any) => {
+  try {
+    if (user) {
+      await sendEmailVerification(user);
+    }
+  } catch (error) {
+    console.error("Error sending email verification manual trigger:", error);
     throw error;
   }
 };
