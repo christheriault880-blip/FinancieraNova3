@@ -131,14 +131,42 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
 
+  const handleGoogleLogin = async () => {
+    setAuthError('');
+    setAuthSuccess('');
+    setAuthLoading(true);
+    try {
+      await loginWithGoogle();
+    } catch (err: any) {
+      console.error(err);
+      let friendlyMessage = 'Ocurrió un error al intentar iniciar sesión con Google.';
+      if (err instanceof Error) {
+        const msg = err.message;
+        if (msg.includes('auth/unauthorized-domain')) {
+          friendlyMessage = 'Este dominio no está autorizado para Google Sign-In aún. Por favor asegúrate de haber agregado tanto "localhost" como tu dominio de Vercel/Producción (por ejemplo: ' + window.location.hostname + ') en Firebase Console -> Authentication -> Settings -> Authorized domains.';
+        } else if (msg.includes('auth/popup-closed-by-user')) {
+          friendlyMessage = 'Se cerró la ventana emergente de Google. Inténtalo de nuevo.';
+        } else if (msg.includes('auth/operation-not-allowed')) {
+          friendlyMessage = 'El inicio de sesión de Google no está activo en tu proyecto de Firebase. Actívalo en la consola de Firebase -> Authentication -> Sign-in Method.';
+        } else {
+          friendlyMessage = `Error de Google Sign-In: ${msg}`;
+        }
+      }
+      setAuthError(friendlyMessage);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
     setAuthSuccess('');
     setAuthLoading(true);
     try {
+      const cleanedEmail = authEmail.trim().toLowerCase();
       if (authMode === 'login') {
-        const loggedUser = await loginWithEmail(authEmail, authPassword);
+        const loggedUser = await loginWithEmail(cleanedEmail, authPassword);
         if (loggedUser && !loggedUser.emailVerified) {
           // Soft success info that they might want to verify, but we let them log in
           setAuthSuccess('¡Sesión iniciada! Nota: Tu correo electrónico no ha sido verificado aún. Revisa tu bandeja de entrada o haz clic en verificar correo en tu perfil.');
@@ -150,14 +178,14 @@ export default function App() {
         if (authPassword.length < 6) {
           throw new Error('La contraseña debe tener al menos 6 caracteres. Firebase no permite registrar contraseñas más cortas por seguridad.');
         }
-        await registerWithEmail(authEmail, authUsername.trim(), authPassword);
-        setAuthSuccess('¡Cuenta registrada exitosamente! Se ha enviado un correo con un enlace de verificación a ' + authEmail + '. Por favor, revise su correo.');
+        await registerWithEmail(cleanedEmail, authUsername.trim(), authPassword);
+        setAuthSuccess('¡Cuenta registrada exitosamente! Se ha enviado un correo con un enlace de verificación a ' + cleanedEmail + '. Por favor, revise su correo.');
       } else if (authMode === 'forgot') {
-        if (!authEmail.trim()) {
+        if (!cleanedEmail) {
           throw new Error('Por favor ingrese su correo electrónico.');
         }
-        await resetPassword(authEmail.trim());
-        setAuthSuccess('Hemos enviado un correo electrónico para restablecer tu contraseña a ' + authEmail + '. Revisa tu bandeja de entrada o carpeta de spam.');
+        await resetPassword(cleanedEmail);
+        setAuthSuccess('Hemos enviado un correo electrónico para restablecer tu contraseña a ' + cleanedEmail + '. Revisa tu bandeja de entrada o carpeta de spam.');
         setAuthMode('login');
       }
     } catch (err: any) {
@@ -166,7 +194,7 @@ export default function App() {
       if (err instanceof Error) {
         const msg = err.message;
         if (msg.includes('auth/invalid-credential') || msg.includes('auth/wrong-password') || msg.includes('auth/user-not-found')) {
-          friendlyMessage = 'Credenciales incorrectas o cuenta inexistente. Verifique su correo y contraseña.';
+          friendlyMessage = 'Credenciales incorrectas o cuenta inexistente. Importante: Si te registraste usando "Acceder con Google", debes ingresar usando ese botón azul de abajo, ya que tu cuenta de Google no tiene una contraseña manual configurada.';
         } else if (msg.includes('auth/email-already-in-use')) {
           friendlyMessage = 'Este correo electrónico ya está registrado. Intente iniciar sesión o use "Olvidé mi contraseña".';
         } else if (msg.includes('auth/weak-password')) {
@@ -397,7 +425,7 @@ export default function App() {
 
           <button 
             type="button"
-            onClick={loginWithGoogle}
+            onClick={handleGoogleLogin}
             className="w-full flex items-center justify-center gap-3 py-3 bg-white border border-zinc-200 rounded-2xl font-bold text-zinc-700 hover:bg-zinc-50 transition-all shadow-sm text-xs"
           >
             <img src="https://www.google.com/favicon.ico" alt="Google" className="w-4 h-4" referrerPolicy="no-referrer" />

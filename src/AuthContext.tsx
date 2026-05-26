@@ -25,12 +25,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isAdmin = user?.email === 'christheriault880@gmail.com';
 
   useEffect(() => {
+    let unsubscribeProfile: (() => void) | null = null;
+    let unsubscribeTransactions: (() => void) | null = null;
+    let unsubscribeGoals: (() => void) | null = null;
+
+    const cleanupSubscriptions = () => {
+      if (unsubscribeProfile) {
+        unsubscribeProfile();
+        unsubscribeProfile = null;
+      }
+      if (unsubscribeTransactions) {
+        unsubscribeTransactions();
+        unsubscribeTransactions = null;
+      }
+      if (unsubscribeGoals) {
+        unsubscribeGoals();
+        unsubscribeGoals = null;
+      }
+    };
+
     const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      cleanupSubscriptions();
       setUser(firebaseUser);
       
       if (firebaseUser) {
         // Subscribe to profile
-        const unsubscribeProfile = subscribeToUserProfile(firebaseUser.uid, async (p) => {
+        unsubscribeProfile = subscribeToUserProfile(firebaseUser.uid, async (p) => {
           if (!p) {
             // Create initial profile if it doesn't exist
             const newProfile: UserProfile = {
@@ -48,22 +68,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
 
         // Subscribe to transactions
-        const unsubscribeTransactions = subscribeToTransactions(firebaseUser.uid, (txs) => {
+        unsubscribeTransactions = subscribeToTransactions(firebaseUser.uid, (txs) => {
           setTransactions(txs);
         });
 
         // Subscribe to goals
-        const unsubscribeGoals = subscribeToGoals(firebaseUser.uid, (gs) => {
+        unsubscribeGoals = subscribeToGoals(firebaseUser.uid, (gs) => {
           setGoals(gs);
         });
 
         setLoading(false);
-
-        return () => {
-          unsubscribeProfile();
-          unsubscribeTransactions();
-          unsubscribeGoals();
-        };
       } else {
         setProfile(null);
         setTransactions([]);
@@ -72,7 +86,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    return () => unsubscribeAuth();
+    return () => {
+      unsubscribeAuth();
+      cleanupSubscriptions();
+    };
   }, []);
 
   return (
