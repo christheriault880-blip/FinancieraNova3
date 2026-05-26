@@ -1,0 +1,156 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: /users/{userId}
+// Document ID: userId (UID from Firebase Auth)
+// Fields:
+//   - uid: string (required) - User's unique ID
+//   - displayName: string (optional) - User's name
+//   - email: string (required) - User's email (PII)
+//   - monthlyBudget: number (required) - Monthly budget limit
+//   - autoSaveEnabled: boolean (optional) - Auto-save toggle
+//   - roundUpEnabled: boolean (optional) - Round-up toggle
+//
+// Collection: /users/{userId}/transactions/{transactionId}
+// Document ID: auto-generated
+// Fields:
+//   - uid: string (required) - Owner's UID
+//   - amount: number (required) - Transaction amount
+//   - category: string (required) - Category enum
+//   - description: string (required) - Description
+//   - date: string (required) - ISO 8601 date string
+//   - type: string (required) - 'expense' or 'income'
+//
+// Collection: /users/{userId}/goals/{goalId}
+// Document ID: auto-generated
+// Fields:
+//   - uid: string (required) - Owner's UID
+//   - name: string (required) - Goal name
+//   - targetAmount: number (required) - Target amount
+//   - currentAmount: number (required) - Current saved amount
+//   - icon: string (optional) - Icon identifier
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'monthlyBudget']) &&
+             data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             data.monthlyBudget is number && data.monthlyBudget >= 0 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('autoSaveEnabled' in data) || data.autoSaveEnabled is bool) &&
+             (!('roundUpEnabled' in data) || data.roundUpEnabled is bool);
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(['uid', 'amount', 'category', 'description', 'date', 'type']) &&
+             data.uid == request.auth.uid &&
+             data.amount is number && data.amount > 0 &&
+             data.category in ['Comida', 'Transporte', 'Ocio', 'Vivienda', 'Salud', 'Suscripciones', 'Otros'] &&
+             data.description is string && data.description.size() > 0 && data.description.size() < 200 &&
+             isValidDateString(data.date) &&
+             data.type in ['expense', 'income'];
+    }
+
+    function isValidGoal(data) {
+      return data.keys().hasAll(['uid', 'name', 'targetAmount', 'currentAmount']) &&
+             data.uid == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.targetAmount is number && data.targetAmount > 0 &&
+             data.currentAmount is number && data.currentAmount >= 0;
+    }
+
+    function isValidInventoryItem(data) {
+      return data.keys().hasAll(['uid', 'name', 'category', 'value', 'purchaseDate']) &&
+             data.uid == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 120 &&
+             data.category in ['Inmuebles', 'Vehículos', 'Tecnología', 'Equipamiento', 'Otros'] &&
+             data.value is number && data.value >= 0 &&
+             isValidDateString(data.purchaseDate) &&
+             (!('location' in data) || (data.location is string && data.location.size() < 200)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() < 1000));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    // User Profiles
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && uidNotModified();
+      allow delete: if isOwner(userId);
+
+      // Transactions Subcollection
+      match /transactions/{transactionId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidTransaction(request.resource.data);
+        allow update: if isOwner(userId) && isValidTransaction(request.resource.data) && uidNotModified();
+        allow delete: if isOwner(userId);
+      }
+
+      // Goals Subcollection
+      match /goals/{goalId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidGoal(request.resource.data);
+        allow update: if isOwner(userId) && isValidGoal(request.resource.data) && uidNotModified();
+        allow delete: if isOwner(userId);
+      }
+
+      // Inventory Subcollection
+      match /inventory/{itemId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidInventoryItem(request.resource.data);
+        allow update: if isOwner(userId) && isValidInventoryItem(request.resource.data) && uidNotModified();
+        allow delete: if isOwner(userId);
+      }
+    }
+    
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

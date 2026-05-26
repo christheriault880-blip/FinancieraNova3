@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-primary: #991b1b; /* Red 800/Maroon */
+  --color-brand-secondary: #450a0a; /* Dark Maroon */
+  --color-brand-dark: #18181b; /* Zinc 900 */
+  --color-brand-light: #fafafa; /* Zinc 50 */
+  
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-zinc-50 text-zinc-900 antialiased;
+  }
+}
+
+.glass-card {
+  @apply bg-white/80 backdrop-blur-md border border-zinc-200 shadow-sm rounded-2xl;
+}
+
+.nav-item-active {
+  @apply text-red-700 bg-red-50;
+}
+

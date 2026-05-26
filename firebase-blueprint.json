@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Información del perfil del usuario y configuración financiera.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "ID único del usuario de Firebase Auth." },
+        "displayName": { "type": "string", "description": "Nombre visible del usuario." },
+        "email": { "type": "string", "description": "Correo electrónico del usuario." },
+        "monthlyBudget": { "type": "number", "description": "Presupuesto mensual establecido." },
+        "autoSaveEnabled": { "type": "boolean", "description": "Si el ahorro automático está activado." },
+        "roundUpEnabled": { "type": "boolean", "description": "Si el redondeo de compras está activado." }
+      },
+      "required": ["uid", "email", "monthlyBudget"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Un registro de ingreso o gasto.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string", "description": "ID del usuario propietario." },
+        "amount": { "type": "number" },
+        "category": { "type": "string", "enum": ["Comida", "Transporte", "Ocio", "Vivienda", "Salud", "Suscripciones", "Otros"] },
+        "description": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "type": { "type": "string", "enum": ["expense", "income"] }
+      },
+      "required": ["uid", "amount", "category", "description", "date", "type"]
+    },
+    "SavingGoal": {
+      "title": "SavingGoal",
+      "description": "Una meta de ahorro del usuario.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "targetAmount": { "type": "number" },
+        "currentAmount": { "type": "number" },
+        "icon": { "type": "string" },
+        "deadline": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "targetAmount", "currentAmount"]
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "Un activo físico o mueble/inmueble registrado en el inventario del usuario.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["Inmuebles", "Vehículos", "Tecnología", "Equipamiento", "Otros"] },
+        "value": { "type": "number" },
+        "purchaseDate": { "type": "string", "format": "date-time" },
+        "location": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["uid", "name", "category", "value", "purchaseDate"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Documento de perfil de usuario."
+    },
+    "/users/{userId}/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Colección de transacciones del usuario."
+    },
+    "/users/{userId}/goals/{goalId}": {
+      "schema": "SavingGoal",
+      "description": "Colección de metas de ahorro del usuario."
+    },
+    "/users/{userId}/inventory/{itemId}": {
+      "schema": "InventoryItem",
+      "description": "Colección de activos e inventario del usuario."
+    }
+  }
+}
