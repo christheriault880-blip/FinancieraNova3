@@ -8,20 +8,42 @@ interface Props {
 interface State {
   hasError: boolean;
   error: Error | null;
+  recoveryAttempts: number;
 }
 
 export default class ErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
-    error: null
+    error: null,
+    recoveryAttempts: 0
   };
 
   public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+    return { hasError: true, error, recoveryAttempts: 0 };
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Uncaught error:', error, errorInfo);
+    console.error('Uncaught error in boundary:', error, errorInfo);
+
+    const errorMessage = error?.message || "";
+    const isDOMMismatch = 
+      errorMessage.includes('insertBefore') || 
+      errorMessage.includes('removeChild') || 
+      errorMessage.includes('Node') || 
+      errorMessage.includes('NotFoundError') ||
+      errorMessage.includes('child of this node');
+
+    if (isDOMMismatch && this.state.recoveryAttempts < 3) {
+      console.warn(`Real-time DOM desync detected (often caused by browser autotranslate or extensions). Attempting self-healing recovery (${this.state.recoveryAttempts + 1}/3)...`);
+      
+      setTimeout(() => {
+        this.setState((prevState) => ({
+          hasError: false,
+          error: null,
+          recoveryAttempts: prevState.recoveryAttempts + 1
+        }));
+      }, 150);
+    }
   }
 
   public render() {
