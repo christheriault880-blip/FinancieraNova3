@@ -10,20 +10,13 @@ import {
   Trash2,
   Boxes
 } from 'lucide-react';
-import { 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip
-} from 'recharts';
 import { formatCurrency, cn } from '../lib/utils';
+import FinanceChart from './FinanceChart';
 import { useAuth } from '../AuthContext';
 import { analyzeExpenses } from '../services/geminiService';
 import { deleteTransaction, subscribeToInventory } from '../services/firestoreService';
 import { AIInsight, InventoryItem } from '../types';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function Dashboard() {
   const { profile, transactions, goals, user } = useAuth();
@@ -31,35 +24,7 @@ export default function Dashboard() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   
-  // Custom ResizeObserver logic to prevent ResponsiveContainer unmounting crashes
-  const [chartWidth, setChartWidth] = useState<number>(0);
-  const chartContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!chartContainerRef.current) return;
-    
-    // Set initial size
-    const initialWidth = chartContainerRef.current.getBoundingClientRect().width;
-    if (initialWidth > 0) {
-      setChartWidth(initialWidth);
-    } else {
-      setChartWidth(500); // stable fallback representation
-    }
-
-    const observer = new ResizeObserver((entries) => {
-      if (!Array.isArray(entries) || !entries.length) return;
-      const entry = entries[0];
-      const width = entry.contentRect.width;
-      if (width > 0) {
-        setChartWidth(width);
-      }
-    });
-
-    observer.observe(chartContainerRef.current);
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
+  // Chart state is fully encapsulated within the FinanceChart component
 
   const handleDelete = async (id: string) => {
     if (!user) return;
@@ -210,47 +175,8 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-6">
               <h3 className="font-bold text-zinc-900">Gastos de la Semana</h3>
             </div>
-            <div ref={chartContainerRef} className="h-[300px] w-full relative">
-              {chartWidth > 0 ? (
-                <AreaChart width={chartWidth} height={300} data={weeklyData}>
-                  <defs>
-                    <linearGradient id="colorAmount" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#991b1b" stopOpacity={0.1}/>
-                      <stop offset="95%" stopColor="#991b1b" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f4f4f5" />
-                  <XAxis 
-                    dataKey="name" 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fontSize: 12, fill: '#71717a' }}
-                    dy={10}
-                  />
-                  <YAxis hide />
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: '#fff', 
-                      borderRadius: '12px', 
-                      border: 'none', 
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.05)' 
-                    }}
-                    formatter={(value: number) => [formatCurrency(value), 'Gasto']}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="amount" 
-                    stroke="#991b1b" 
-                    strokeWidth={3}
-                    fillOpacity={1} 
-                    fill="url(#colorAmount)" 
-                  />
-                </AreaChart>
-              ) : (
-                <div className="flex items-center justify-center h-full w-full">
-                  <span className="text-xs text-zinc-400">Cargando gráfico...</span>
-                </div>
-              )}
+            <div className="h-[260px] w-full relative">
+              <FinanceChart data={weeklyData} />
             </div>
           </div>
 
