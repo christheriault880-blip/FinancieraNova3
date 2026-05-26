@@ -191,18 +191,20 @@ export default function App() {
     } catch (err: any) {
       console.error(err);
       let friendlyMessage = 'Ocurrió un error inesperado al intentar realizar la operación.';
-      if (err instanceof Error) {
-        const msg = err.message;
+      const msg = err && typeof err === 'object' && 'message' in err ? String(err.message) : String(err);
+      if (msg) {
         if (msg.includes('auth/invalid-credential') || msg.includes('auth/wrong-password') || msg.includes('auth/user-not-found')) {
           friendlyMessage = 'Credenciales incorrectas o cuenta inexistente. Importante: Si te registraste usando "Acceder con Google", debes ingresar usando ese botón azul de abajo, ya que tu cuenta de Google no tiene una contraseña manual configurada.';
         } else if (msg.includes('auth/email-already-in-use')) {
           friendlyMessage = 'Este correo electrónico ya está registrado. Intente iniciar sesión o use "Olvidé mi contraseña".';
         } else if (msg.includes('auth/weak-password')) {
-          friendlyMessage = 'La contraseña debe tener al menos 6 caracteres.';
+          friendlyMessage = 'La contraseña debe tener al menos 6 caracteres. Firebase requiere contraseñas de al menos 6 caracteres por seguridad.';
         } else if (msg.includes('auth/invalid-email')) {
           friendlyMessage = 'El formato de correo electrónico ingresado no es válido.';
         } else if (msg.includes('auth/operation-not-allowed')) {
           friendlyMessage = 'El registro con Correo/Contraseña está desactivado en tu proyecto Firebase. Actívalo en tu Firebase Console: ve a Authentication -> Sign-in Method -> Agregar nuevo proveedor -> selecciona "Correo electrónico/contraseña" y actívalo para que empiece a funcionar en la web.';
+        } else if (msg.includes('auth/too-many-requests')) {
+          friendlyMessage = 'Demasiados intentos de inicio de sesión fallidos. La cuenta ha sido bloqueada temporalmente. Por favor intenta de nuevo más tarde o restablece tu contraseña.';
         } else {
           friendlyMessage = msg;
         }
@@ -370,7 +372,6 @@ export default function App() {
                   <input
                     type="password"
                     required
-                    minLength={6}
                     placeholder="******"
                     value={authPassword}
                     onChange={(e) => setAuthPassword(e.target.value)}

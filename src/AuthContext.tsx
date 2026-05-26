@@ -51,19 +51,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (firebaseUser) {
         // Subscribe to profile
         unsubscribeProfile = subscribeToUserProfile(firebaseUser.uid, async (p) => {
-          if (!p) {
-            // Create initial profile if it doesn't exist
-            const newProfile: UserProfile = {
+          try {
+            if (!p) {
+              // Create initial profile if it doesn't exist
+              const newProfile: UserProfile = {
+                uid: firebaseUser.uid,
+                displayName: firebaseUser.displayName || 'Usuario',
+                email: firebaseUser.email || `${firebaseUser.uid}@temp-financieranova.com`,
+                monthlyBudget: 2000,
+                autoSaveEnabled: true,
+                roundUpEnabled: true
+              };
+              await createUserProfile(newProfile);
+            } else {
+              setProfile(p);
+            }
+          } catch (subscriptionErr) {
+            console.error("Error setting up or creating user profile snapshot:", subscriptionErr);
+            // Non-fatal fallback configuration so app doesn't hang or crash completely
+            setProfile({
               uid: firebaseUser.uid,
               displayName: firebaseUser.displayName || 'Usuario',
-              email: firebaseUser.email || '',
+              email: firebaseUser.email || `${firebaseUser.uid}@temp-financieranova.com`,
               monthlyBudget: 2000,
               autoSaveEnabled: true,
               roundUpEnabled: true
-            };
-            await createUserProfile(newProfile);
-          } else {
-            setProfile(p);
+            });
           }
         });
 
