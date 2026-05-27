@@ -1,11 +1,24 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Transaction, AIInsight } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+let activeApiKey = '';
+
+export function setGeminiApiKey(key: string) {
+  activeApiKey = key;
+  if (key) {
+    localStorage.setItem('nova_gemini_api_key', key);
+  }
+}
+
+function getGeminiClient() {
+  const keyToUse = activeApiKey || localStorage.getItem('nova_gemini_api_key') || process.env.GEMINI_API_KEY || '';
+  return new GoogleGenAI({ apiKey: keyToUse });
+}
 
 export async function analyzeExpenses(transactions: Transaction[]): Promise<AIInsight[]> {
-  if (!process.env.GEMINI_API_KEY) {
-    console.warn("GEMINI_API_KEY not found. Using mock insights.");
+  const keyToUse = activeApiKey || localStorage.getItem('nova_gemini_api_key') || process.env.GEMINI_API_KEY || '';
+  if (!keyToUse) {
+    console.warn("GEMINI_API_KEY not configured. Using mock insights.");
     return [];
   }
 
@@ -28,8 +41,9 @@ export async function analyzeExpenses(transactions: Transaction[]): Promise<AIIn
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+    const aiInstance = getGeminiClient();
+    const response = await aiInstance.models.generateContent({
+      model: "gemini-3.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -61,7 +75,8 @@ export async function analyzeExpenses(transactions: Transaction[]): Promise<AIIn
 }
 
 export async function chatWithAI(messages: { role: 'user' | 'assistant', content: string }[], transactions: Transaction[]) {
-  if (!process.env.GEMINI_API_KEY) return "Lo siento, la IA no está configurada correctamente.";
+  const keyToUse = activeApiKey || localStorage.getItem('nova_gemini_api_key') || process.env.GEMINI_API_KEY || '';
+  if (!keyToUse) return "Lo siento, el Asistente Inteligente no tiene configurada una clave de API de Gemini válida en las Configuraciones.";
 
   const systemInstruction = `
     Eres un asistente financiero experto llamado Financiera Nova. 
@@ -75,8 +90,9 @@ export async function chatWithAI(messages: { role: 'user' | 'assistant', content
   `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+    const aiInstance = getGeminiClient();
+    const response = await aiInstance.models.generateContent({
+      model: "gemini-3.5-flash",
       contents: messages.map(m => ({
         role: m.role === 'user' ? 'user' : 'model',
         parts: [{ text: m.content }]
@@ -89,6 +105,6 @@ export async function chatWithAI(messages: { role: 'user' | 'assistant', content
     return response.text || "No pude generar una respuesta.";
   } catch (error) {
     console.error("Error in AI chat:", error);
-    return "Hubo un error al procesar tu solicitud.";
+    return "Hubo un error al procesar tu solicitud con el Asistente Inteligente. Por favor, asegúrate de haber configurado tu propia clave Gemini API de forma correcta en el panel de configuración (icono de engranaje).";
   }
 }

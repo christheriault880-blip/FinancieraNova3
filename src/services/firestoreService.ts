@@ -12,7 +12,7 @@ import {
   getDoc
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { Transaction, SavingGoal, UserProfile, Category, InventoryItem } from '../types';
+import { Transaction, SavingGoal, UserProfile, Category, InventoryItem, DailySalesSummary } from '../types';
 
 export enum OperationType {
   CREATE = 'create',
@@ -191,6 +191,74 @@ export const updateInventoryItemNotes = async (userId: string, itemId: string, n
     await updateDoc(doc(db, path), { notes });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+};
+
+export const updateInventoryItem = async (userId: string, itemId: string, updates: Partial<InventoryItem>) => {
+  const path = `users/${userId}/inventory/${itemId}`;
+  try {
+    await updateDoc(doc(db, path), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+};
+
+// Daily Sales Summaries History
+export const subscribeToDailySummaries = (userId: string, callback: (summaries: DailySalesSummary[]) => void) => {
+  const path = `users/${userId}/daily_summaries`;
+  return onSnapshot(collection(db, path), (snapshot) => {
+    const summaries = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as DailySalesSummary));
+    callback(summaries);
+  }, (error) => {
+    handleFirestoreError(error, OperationType.LIST, path);
+  });
+};
+
+export const addDailySummary = async (userId: string, summary: Omit<DailySalesSummary, 'id'>) => {
+  const path = `users/${userId}/daily_summaries`;
+  try {
+    const docRef = await addDoc(collection(db, path), { ...summary, uid: userId });
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+};
+
+export const deleteDailySummary = async (userId: string, summaryId: string) => {
+  const path = `users/${userId}/daily_summaries/${summaryId}`;
+  try {
+    await deleteDoc(doc(db, path));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+};
+
+
+// System Settings & Credentials Configuration (EmailJS & Gemini API Key)
+export const getSystemSettings = async (): Promise<any | null> => {
+  const path = 'settings/credentials';
+  try {
+    const docSnap = await getDoc(doc(db, path));
+    if (docSnap.exists()) {
+      return docSnap.data();
+    }
+  } catch (error) {
+    console.error('Error fetching global credentials from Firestore:', error);
+  }
+  return null;
+};
+
+export const saveSystemSettings = async (settings: { 
+  emailjs_service_id?: string;
+  emailjs_template_id?: string;
+  emailjs_public_key?: string;
+  gemini_api_key?: string;
+}) => {
+  const path = 'settings/credentials';
+  try {
+    await setDoc(doc(db, path), settings, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
   }
 };
 

@@ -126,6 +126,30 @@ export default function App() {
     type: 'expense' as 'income' | 'expense'
   });
 
+  // Load global system credentials on mount / user login
+  useState(() => {
+    const loadSystemCredentials = async () => {
+      try {
+        const { getSystemSettings } = await import('./services/firestoreService');
+        const { setGeminiApiKey } = await import('./services/geminiService');
+        const settings = await getSystemSettings();
+        if (settings) {
+          if (settings.emailjs_service_id) localStorage.setItem('nova_emailjs_service_id', settings.emailjs_service_id);
+          if (settings.emailjs_template_id) localStorage.setItem('nova_emailjs_template_id', settings.emailjs_template_id);
+          if (settings.emailjs_public_key) localStorage.setItem('nova_emailjs_public_key', settings.emailjs_public_key);
+          if (settings.gemini_api_key) {
+            localStorage.setItem('nova_gemini_api_key', settings.gemini_api_key);
+            setGeminiApiKey(settings.gemini_api_key);
+          }
+        }
+      } catch (err) {
+        console.error("Error loading system credentials from Firestore:", err);
+      }
+    };
+
+    loadSystemCredentials();
+  });
+
   // Authentication states
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [authEmail, setAuthEmail] = useState('');

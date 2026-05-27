@@ -30,7 +30,9 @@ export async function sendPaymentReminderEmail(params: EmailParams): Promise<{ s
   try {
     const templateParams = {
       to_email: params.to_email,
-      to_name: params.user_name || 'Estimado Usuario',
+      to_name: params.user_name || 'Estimado Cliente',
+      from_name: 'Financiera Nova',
+      reply_to: 'soporte@financieranova.com.do',
       payment_title: params.payment_title,
       payment_category: params.payment_category.toUpperCase(),
       payment_amount: params.payment_amount.toLocaleString('es-DO', { style: 'currency', currency: 'DOP' }),
@@ -39,7 +41,17 @@ export async function sendPaymentReminderEmail(params: EmailParams): Promise<{ s
         month: 'long',
         year: 'numeric'
       }),
-      message: `Tu pago de ${params.payment_title} por un monto de RD$ ${params.payment_amount.toLocaleString()} vence el ${params.payment_due_date}. ¡Por favor regístralo a tiempo en Financiera Nova!`
+      message: `Hola ${params.user_name || 'Estimado Cliente'},\n\nLe escribimos de Financiera Nova para recordarle que tiene una obligación de pago próxima a vencer:\n\n` +
+               `--------------------------------------------------\n` +
+               `💰 Descripción: ${params.payment_title}\n` +
+               `🏷️ Categoría: ${params.payment_category.toUpperCase()}\n` +
+               `💵 Monto a Pagar: ${params.payment_amount.toLocaleString('es-DO', { style: 'currency', currency: 'DOP' })}\n` +
+               `📅 Fecha de Vencimiento: ${new Date(params.payment_due_date + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })}\n` +
+               `--------------------------------------------------\n\n` +
+               `Por favor, regístrelo o realice el saldo correspondiente a la brevedad para evitar cargos de mora o recargos adicionales.\n\n` +
+               `Si tiene alguna duda, puede responder directamente a este correo.\n\n` +
+               `Atentamente,\n` +
+               `El equipo de soporte y cobranzas - Financiera Nova.`
     };
 
     const response = await emailjs.send(serviceId, templateId, templateParams, publicKey);

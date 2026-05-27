@@ -23,6 +23,8 @@ import {
 import { cn, formatCurrency } from '../lib/utils';
 import { useAuth } from '../AuthContext';
 import { sendPaymentReminderEmail, triggerBrowserNotification } from '../services/emailService';
+import { saveSystemSettings } from '../services/firestoreService';
+import { setGeminiApiKey } from '../services/geminiService';
 
 export interface PaymentReminder {
   id: string;
@@ -32,6 +34,7 @@ export interface PaymentReminder {
   dueDate: string; // YYYY-MM-DD
   emailNotification: boolean;
   completed: boolean;
+  recipientEmail?: string;
   lastNotifiedOption?: string; // YYYY-MM-DD to avoid repeating
 }
 
@@ -117,6 +120,7 @@ export default function PaymentReminders() {
   const [serviceId, setServiceId] = useState(() => localStorage.getItem('nova_emailjs_service_id') || '');
   const [templateId, setTemplateId] = useState(() => localStorage.getItem('nova_emailjs_template_id') || '');
   const [publicKey, setPublicKey] = useState(() => localStorage.getItem('nova_emailjs_public_key') || '');
+  const [geminiApiKey, setGeminiApiKeyInput] = useState(() => localStorage.getItem('nova_gemini_api_key') || '');
 
   // Form states
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -125,6 +129,7 @@ export default function PaymentReminders() {
   const [amount, setAmount] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [emailNotification, setEmailNotification] = useState(true);
+  const [customRecipientEmail, setCustomRecipientEmail] = useState('');
 
   // Log status states
   const [logs, setLogs] = useState<string[]>([]);
@@ -136,12 +141,31 @@ export default function PaymentReminders() {
   }, [reminders]);
 
   // Handle configuration edits
-  const handleSaveConfig = (e: React.FormEvent) => {
+  const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     localStorage.setItem('nova_emailjs_service_id', serviceId);
     localStorage.setItem('nova_emailjs_template_id', templateId);
     localStorage.setItem('nova_emailjs_public_key', publicKey);
-    addLog(`⚙️ Configuración EmailJS guardada localmente.`);
+    localStorage.setItem('nova_gemini_api_key', geminiApiKey);
+    
+    // Set Gemini active key in memory
+    setGeminiApiKey(geminiApiKey);
+
+    try {
+      await saveSystemSettings({
+        emailjs_service_id: serviceId,
+        emailjs_template_id: templateId,
+        emailjs_public_key: publicKey,
+        gemini_api_key: geminiApiKey
+      });
+      addLog(`⚙️ Configuración global (EmailJS y Gemini) guardada con éxito en Firestore.`);
+      alert("¡Configuración guardada exitosamente en Firestore! Ahora todos sus clientes podrán usar las alertas de correo y la IA en cualquier dispositivo.");
+    } catch (err: any) {
+      console.error(err);
+      addLog(`❌ Error al guardar en Firestore: ${err.message}`);
+      alert("Ocurrió un error al intentar guardar en la base de datos de Firestore. Asegúrese de estar conectado a Internet.");
+    }
+
     setShowConfig(false);
   };
 
@@ -193,10 +217,11 @@ export default function PaymentReminders() {
         }
 
         if (item.emailNotification && item.lastNotifiedOption !== tomorrowStr) {
-          addLog(`📨 Intentando enviar correo electrónico automático para: ${item.title}...`);
+          const targetEmail = item.recipientEmail || userEmail;
+          addLog(`📨 Intentando enviar correo electrónico automático para: ${item.title} a ${targetEmail}...`);
           try {
             const emailResult = await sendPaymentReminderEmail({
-              to_email: userEmail,
+              to_email: targetEmail,
               user_name: userName,
               payment_title: item.title,
               payment_category: item.category,
@@ -205,7 +230,7 @@ export default function PaymentReminders() {
             });
             
             if (emailResult.success) {
-              addLog(`✅ ¡Correo despachado con éxito! Destinatario: ${userEmail}`);
+              addLog(`✅ ¡Correo despachado con éxito! Destinatario: ${targetEmail}`);
             } else {
               addLog(`ℹ️ Correo simulado/fallido: ${emailResult.message}`);
             }
@@ -232,6 +257,7 @@ export default function PaymentReminders() {
     e.preventDefault();
     if (!title || !dueDate || !amount) return;
 
+    const targetEmail = customRecipientEmail.trim() || userEmail;
     const newReminder: PaymentReminder = {
       id: 'rem-' + Date.now(),
       title,
@@ -239,7 +265,8 @@ export default function PaymentReminders() {
       amount: Number(amount),
       dueDate,
       emailNotification,
-      completed: false
+      completed: false,
+      recipientEmail: targetEmail
     };
 
     setReminders([newReminder, ...reminders]);
@@ -251,8 +278,9 @@ export default function PaymentReminders() {
     setAmount('');
     setDueDate('');
     setEmailNotification(true);
+    setCustomRecipientEmail('');
 
-    addLog(`➕ Recordatorio creado: "${newReminder.title}" para el ${newReminder.dueDate}.`);
+    addLog(`➕ Recordatorio creado: "${newReminder.title}" para el ${newReminder.dueDate} destinado a: ${targetEmail}.`);
   };
 
   const handleDeleteReminder = (id: string, e: React.MouseEvent) => {
@@ -274,10 +302,11 @@ export default function PaymentReminders() {
   // Manual trigger for testing right now
   const handleManualEmailTest = async (item: PaymentReminder, e: React.MouseEvent) => {
     e.stopPropagation();
-    addLog(`📨 Disparando envío manual de correo de prueba a: ${userEmail}...`);
+    const targetEmail = item.recipientEmail || userEmail;
+    addLog(`📨 Disparando envío manual de correo de prueba a: ${targetEmail}...`);
     
     const emailResult = await sendPaymentReminderEmail({
-      to_email: userEmail,
+      to_email: targetEmail,
       user_name: userName,
       payment_title: item.title,
       payment_category: item.category,
@@ -286,8 +315,8 @@ export default function PaymentReminders() {
     });
 
     if (emailResult.success) {
-      alert(`¡Éxito! Correo de recordatorio para "${item.title}" enviado satisfactoriamente a: ${userEmail}`);
-      addLog(`✅ ¡Confirmación manual enviada con éxito a ${userEmail}!`);
+      alert(`¡Éxito! Correo de recordatorio para "${item.title}" enviado satisfactoriamente a: ${targetEmail}`);
+      addLog(`✅ ¡Confirmación manual enviada con éxito a ${targetEmail}!`);
     } else {
       alert(`Aviso: ${emailResult.message}\n\nHemos simulado el envío con éxito. Registra tus credenciales de EmailJS en la sección "Configurar EmailJS" arriba a la derecha para enviar correos de verdad mediante tu servidor de correo en producción.`);
       addLog(`ℹ️ Notificación manual completada: ${emailResult.message}`);
@@ -378,16 +407,16 @@ export default function PaymentReminders() {
                   </ul>
                 </li>
                 <li>Copie su <strong>Public Key</strong> en Account &rarr; API Keys.</li>
-                <li>Ingrese sus credenciales en el formulario de la derecha (o en el archivo .env) y el sistema estará 100% operativo enviando correos instantáneos de verdad.</li>
+                <li>Ingrese sus credenciales en el formulario de la derecha (o en el archivo .env) y el sistema estará 100% operativo de inmediato.</li>
               </ol>
             </div>
 
             {/* Config Form Inputs */}
             <form onSubmit={handleSaveConfig} className="lg:col-span-5 bg-white p-4 border border-zinc-150 rounded-2xl space-y-3">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">Credenciales Locales de Correo</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">Credenciales Globales del Sistema</p>
               
               <div>
-                <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Service ID</label>
+                <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Service ID (EmailJS)</label>
                 <input
                   type="text"
                   placeholder="Ej: service_gmail"
@@ -398,7 +427,7 @@ export default function PaymentReminders() {
               </div>
 
               <div>
-                <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Template ID</label>
+                <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Template ID (EmailJS)</label>
                 <input
                   type="text"
                   placeholder="Ej: template_xxxxxx"
@@ -409,13 +438,24 @@ export default function PaymentReminders() {
               </div>
 
               <div>
-                <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Public Key / User Key</label>
+                <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Public Key / User Key (EmailJS)</label>
                 <input
                   type="text"
                   placeholder="Ej: pk_xxxxxxxxxxxxxxxx"
                   className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-red-800"
                   value={publicKey}
                   onChange={(e) => setPublicKey(e.target.value)}
+                />
+              </div>
+
+              <div className="border-t border-zinc-100 pt-2 mt-2">
+                <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Gemini API Key (Para Asistente de IA)</label>
+                <input
+                  type="password"
+                  placeholder="Ej: AIzaSyDxxxxxxxxxxxx"
+                  className="w-full px-3 py-1.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs outline-none focus:ring-1 focus:ring-red-800"
+                  value={geminiApiKey}
+                  onChange={(e) => setGeminiApiKeyInput(e.target.value)}
                 />
               </div>
 
@@ -498,17 +538,33 @@ export default function PaymentReminders() {
               <p className="text-[10px] text-zinc-400 mt-1">Sugerencia: Ponga la fecha de mañana para ver el aviso de "Tu pago vence mañana".</p>
             </div>
 
-            <div className="flex items-center gap-2 pl-2 self-center">
-              <input
-                type="checkbox"
-                id="email-notif-toggle"
-                className="w-4 h-4 rounded text-red-800 border-zinc-200 outline-none"
-                checked={emailNotification}
-                onChange={(e) => setEmailNotification(e.target.checked)}
-              />
-              <label htmlFor="email-notif-toggle" className="text-xs text-zinc-650 font-semibold select-none">
-                Enviar alerta por correo electrónico (<span className="text-zinc-500 font-mono">{userEmail}</span>)
-              </label>
+            <div className="flex flex-col gap-2 pl-1 self-center w-full">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="email-notif-toggle"
+                  className="w-4 h-4 rounded text-red-850 border-zinc-200 outline-none cursor-pointer"
+                  checked={emailNotification}
+                  onChange={(e) => setEmailNotification(e.target.checked)}
+                />
+                <label htmlFor="email-notif-toggle" className="text-xs text-zinc-650 font-bold select-none cursor-pointer">
+                  Enviar alerta por correo electrónico
+                </label>
+              </div>
+              {emailNotification && (
+                <div className="mt-1">
+                  <input
+                    type="email"
+                    placeholder={`Correo destinatario (Ej: ${userEmail})`}
+                    className="w-full px-4 py-2 bg-zinc-50 border border-zinc-250 rounded-xl text-xs outline-none focus:ring-1 focus:ring-red-800"
+                    value={customRecipientEmail}
+                    onChange={(e) => setCustomRecipientEmail(e.target.value)}
+                  />
+                  <p className="text-[9px] text-zinc-400 mt-1">
+                    Dejar vacío para enviar por defecto al correo registrado: <strong>{userEmail}</strong>
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -603,6 +659,12 @@ export default function PaymentReminders() {
                               <Calendar className="w-3.5 h-3.5 text-zinc-400" />
                               Vence: <strong>{new Date(item.dueDate + 'T00:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
                             </span>
+                            {item.emailNotification && (
+                              <span className="flex items-center gap-1 text-[10px] text-zinc-500 font-mono">
+                                <Mail className="w-3 w-3 text-red-700/70" />
+                                Alerta a: <span className="text-red-900 font-bold underline decoration-dotted">{item.recipientEmail || userEmail}</span>
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>

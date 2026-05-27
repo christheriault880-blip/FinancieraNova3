@@ -59,6 +59,22 @@
         "notes": { "type": "string" }
       },
       "required": ["uid", "name", "category", "value", "purchaseDate"]
+    },
+    "DailySalesSummary": {
+      "title": "DailySalesSummary",
+      "description": "El total de ventas diarias archivado de cada jornada cerrada.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "date": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "totalUnitsSold": { "type": "number" },
+        "totalIncome": { "type": "number" },
+        "totalProfit": { "type": "number" },
+        "productsSold": { "type": "array" }
+      },
+      "required": ["uid", "date", "createdAt", "totalUnitsSold", "totalIncome", "totalProfit", "productsSold"]
     }
   },
   "firestore": {
@@ -77,6 +93,10 @@
     "/users/{userId}/inventory/{itemId}": {
       "schema": "InventoryItem",
       "description": "Colección de activos e inventario del usuario."
+    },
+    "/users/{userId}/daily_summaries/{summaryId}": {
+      "schema": "DailySalesSummary",
+      "description": "Lista de cierres diarios e historial de ventas guardadas."
     }
   }
 }
