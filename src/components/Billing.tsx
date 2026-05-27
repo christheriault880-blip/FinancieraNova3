@@ -13,13 +13,23 @@ import {
   Building,
   CheckCircle2,
   Search,
-  FolderOpen
+  FolderOpen,
+  Boxes,
+  AlertCircle
 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 import { useAuth } from '../AuthContext';
+import { 
+  subscribeToInventory, 
+  updateInventoryItem, 
+  addTransaction 
+} from '../services/firestoreService';
+import { InventoryItem } from '../types';
+import PosCalculator from './PosCalculator';
 
 interface InvoiceItem {
   id: string;
+  productId?: string;
   description: string;
   quantity: number;
   price: number;
@@ -62,7 +72,7 @@ const convertAmount = (amount: number, from: string, to: string) => {
 };
 
 export default function Billing() {
-  const { profile } = useAuth();
+  const { user, profile } = useAuth();
   
   // Custom Issuer/Company Details Configuration
   const [issuerName, setIssuerName] = useState('Financiera Nova');
@@ -89,10 +99,13 @@ export default function Billing() {
   const [currency, setCurrency] = useState('RD$');
   const [status, setStatus] = useState<'pending' | 'paid'>('pending');
 
-  // Invoice Items
-  const [items, setItems] = useState<InvoiceItem[]>([
-    { id: '1', description: 'Consultoría Financiera Nova', quantity: 1, price: 3500 },
-  ]);
+  // Real-time Inventory list
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState<string>('');
+  const [isAddingProductMode, setIsAddingProductMode] = useState<boolean>(true);
+
+  // Invoice Items (starts empty for real POS/billing usage)
+  const [items, setItems] = useState<InvoiceItem[]>([]);
 
   // Current Input Row
   const [newItemDesc, setNewItemDesc] = useState('');
@@ -107,10 +120,41 @@ export default function Billing() {
   });
   const [savedSearchTerm, setSavedSearchTerm] = useState('');
 
+  // Navigation tabs for billing sub-modes
+  const [billingSubTab, setBillingSubTab] = useState<'pos_calculator' | 'classic_billing'>('pos_calculator');
+
+  // POS / Calculator Mode state variables
+  const [posSearchSearch, setPosSearchSearch] = useState('');
+  const [posCart, setPosCart] = useState<{ id: string; productId: string; name: string; price: number; quantity: number; maxStock: number }[]>([]);
+  const [posClientName, setPosClientName] = useState('Cliente General POS');
+  const [posClientRnc, setPosClientRnc] = useState('');
+  const [posTaxRate, setPosTaxRate] = useState(18); // default ITBIS 18%
+  const [posDiscount, setPosDiscount] = useState(0); 
+  const [posSuccessModal, setPosSuccessModal] = useState<{
+    invoiceNumber: string;
+    clientName: string;
+    totalItems: number;
+    subtotal: number;
+    taxAmount: number;
+    grandTotal: number;
+    itemsSummary: { productId: string; name: string; price: number; quantity: number }[];
+  } | null>(null);
+  const [isProcessingPos, setIsProcessingPos] = useState(false);
+  const [productQuantitiesInput, setProductQuantitiesInput] = useState<Record<string, number>>({});
+
   // Save changes to localStorage on change
   useEffect(() => {
     localStorage.setItem('nova_saved_invoices', JSON.stringify(savedInvoices));
   }, [savedInvoices]);
+
+  // Load real-time items from user inventory
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = subscribeToInventory(user.uid, (data) => {
+      setInventoryItems(data);
+    });
+    return () => unsubscribe();
+  }, [user]);
 
   // Handler to clear form and start new invoice
   const handleNewInvoice = () => {
@@ -126,13 +170,44 @@ export default function Billing() {
     setDiscount(0);
     setCurrency('RD$');
     setStatus('pending');
-    setItems([{ id: '1', description: 'Consultoría Financiera Nova', quantity: 1, price: 3500 }]);
+    setItems([]);
+    setSelectedProductId('');
+    setNewItemDesc('');
+    setNewItemQty(1);
+    setNewItemPrice(0);
   };
 
   // Handler to save current invoice draft in history
-  const handleSaveInvoice = () => {
+  const handleSaveInvoice = async () => {
+    if (!user) {
+      alert('Debe iniciar sesión para guardar facturas.');
+      return;
+    }
     if (!clientName) {
       alert('Por favor ingrese el nombre del cliente antes de guardar la factura.');
+      return;
+    }
+    if (items.length === 0) {
+      alert('Por favor agregue por lo menos un producto o concepto a la factura.');
+      return;
+    }
+
+    // Dynamic stock limit check before database commitment
+    const stockErrors: string[] = [];
+    for (const item of items) {
+      if (item.productId) {
+        const found = inventoryItems.find(it => it.id === item.productId);
+        if (found) {
+          const currentStock = found.stock || 0;
+          if (item.quantity > currentStock) {
+            stockErrors.push(`El producto "${found.name}" excede el stock disponible. Stock: ${currentStock} u., en factura: ${item.quantity} u.`);
+          }
+        }
+      }
+    }
+
+    if (stockErrors.length > 0) {
+      alert(`⚠️ Problema de Inventario:\n\n${stockErrors.join('\n')}\n\nPor favor disminuya la cantidad solicitada para proceder.`);
       return;
     }
 
@@ -161,11 +236,14 @@ export default function Billing() {
 
     const existsIndex = savedInvoices.findIndex(inv => inv.invoiceNumber === invoiceNumber);
     let updated: SavedInvoice[];
+    let isCreatingNew = true;
+    
     if (existsIndex >= 0) {
       const confirmOverwrite = window.confirm(`La factura con código ${invoiceNumber} ya existe en el historial. ¿Desea sobrescribirla / actualizarla con los datos actuales?`);
       if (confirmOverwrite) {
         updated = [...savedInvoices];
         updated[existsIndex] = currentInvoice;
+        isCreatingNew = false;
       } else {
         return;
       }
@@ -173,8 +251,44 @@ export default function Billing() {
       updated = [currentInvoice, ...savedInvoices];
     }
 
-    setSavedInvoices(updated);
-    alert(`Factura ${invoiceNumber} guardada en su historial local.`);
+    try {
+      // Deduct stock levels in Firestore database automatically
+      for (const item of items) {
+        if (item.productId) {
+          const found = inventoryItems.find(it => it.id === item.productId);
+          if (found) {
+            const currentStock = found.stock || 0;
+            const updatedStock = Math.max(0, currentStock - item.quantity);
+            const updatedSold = (found.totalSold || 0) + item.quantity;
+            const updatedIncome = (found.salesIncome || 0) + (item.quantity * item.price);
+
+            await updateInventoryItem(user.uid, item.productId, {
+              stock: updatedStock,
+              totalSold: updatedSold,
+              salesIncome: updatedIncome
+            });
+          }
+        }
+      }
+
+      // Log automatically of income transaction in finance ledger if status is paid
+      if (status === 'paid' && isCreatingNew) {
+        await addTransaction(user.uid, {
+          amount: grandTotal,
+          category: 'Otros',
+          description: `Venta Facturada: ${invoiceNumber} para ${clientName}`,
+          date: new Date().toISOString(),
+          type: 'income'
+        });
+      }
+
+      setSavedInvoices(updated);
+      alert(`✅ Factura ${invoiceNumber} guardada exitosamente.\nSe ha descontado la cantidad vendida del inventario de forma automática.`);
+    } catch (dbErr) {
+      console.error("Error al descontar stock de inventario:", dbErr);
+      alert("Factura guardada, pero ocurrió un error al actualizar los niveles físicos de stock en Firestore.");
+      setSavedInvoices(updated);
+    }
   };
 
   // Handler to load selected historical invoice
@@ -228,32 +342,356 @@ export default function Billing() {
     }
   };
 
+  // POS calculations (declared early to be usable in save helpers)
+  const posSubtotal = posCart.reduce((acc, curr) => acc + (curr.quantity * curr.price), 0);
+  const posTaxAmount = (posSubtotal * posTaxRate) / 100;
+  const posGrandTotal = Math.max(0, posSubtotal + posTaxAmount - posDiscount);
+
+  // POS/Calculator Cart handlers and inventory checkout method
+  const handleAddProductToPosCart = (prod: InventoryItem) => {
+    const qty = productQuantitiesInput[prod.id] || 1;
+    const stockAvailable = prod.stock || 0;
+    
+    if (qty <= 0) {
+      alert("Por favor ajuste una cantidad válida de al menos 1 unidad.");
+      return;
+    }
+    
+    if (qty > stockAvailable) {
+      alert(`⚠️ No puede vender más cantidad de la disponible en inventario (${stockAvailable} u.).`);
+      return;
+    }
+
+    // Check what is already in the cart for this product
+    const existing = posCart.find(item => item.productId === prod.id);
+    const existingQty = existing ? existing.quantity : 0;
+
+    if (existingQty + qty > stockAvailable) {
+      alert(`⚠️ Límite Excedido: Ya tiene ${existingQty} unidades en el carrito y está intentando agregar ${qty} más, lo cual supera el stock disponible de ${stockAvailable} unidades.`);
+      return;
+    }
+
+    if (existing) {
+      setPosCart(posCart.map(item => 
+        item.productId === prod.id 
+          ? { ...item, quantity: item.quantity + qty }
+          : item
+      ));
+    } else {
+      setPosCart([
+        ...posCart,
+        {
+          id: 'pos-' + Date.now() + Math.random().toString().substring(2,6),
+          productId: prod.id,
+          name: prod.name,
+          price: prod.price || prod.value || 0,
+          quantity: qty,
+          maxStock: stockAvailable
+        }
+      ]);
+    }
+
+    // Reset input back to 1 for best UX flow
+    setProductQuantitiesInput(prev => ({ ...prev, [prod.id]: 1 }));
+  };
+
+  const handleUpdateCartQty = (productId: string, newQty: number) => {
+    const foundProduct = inventoryItems.find(it => it.id === productId);
+    const maxPoss = foundProduct ? (foundProduct.stock || 0) : 99999;
+    
+    if (newQty <= 0) {
+      setPosCart(posCart.filter(item => item.productId !== productId));
+      return;
+    }
+
+    const cappedQty = Math.min(newQty, maxPoss);
+    if (newQty > maxPoss) {
+      alert(`⚠️ Límite de Inventario: El stock máximo disponible para este producto es de ${maxPoss} unidades.`);
+    }
+
+    setPosCart(posCart.map(item => 
+      item.productId === productId 
+         ? { ...item, quantity: cappedQty }
+         : item
+    ));
+  };
+
+  const handleRemovePosCartItem = (productId: string) => {
+    setPosCart(posCart.filter(item => item.productId !== productId));
+  };
+
+  const handleSavePosInvoice = async () => {
+    if (!user) {
+      alert('Debe iniciar sesión para registrar y guardar ventas en el inventario.');
+      return;
+    }
+    if (posCart.length === 0) {
+      alert('🛒 El carrito de facturación está vacío. Elija un producto de inventario.');
+      return;
+    }
+
+    setIsProcessingPos(true);
+    try {
+      // 1. Final confirmation check of stock availability
+      const stockErrors: string[] = [];
+      for (const item of posCart) {
+        const matchingDbItem = inventoryItems.find(it => it.id === item.productId);
+        if (matchingDbItem) {
+          const currentDbStock = matchingDbItem.stock || 0;
+          if (item.quantity > currentDbStock) {
+            stockErrors.push(`"${matchingDbItem.name}" no tiene suficiente stock. Disponible: ${currentDbStock} u., Deseado: ${item.quantity} u.`);
+          }
+        }
+      }
+
+      if (stockErrors.length > 0) {
+        alert(`❌ Error de Stock en Inventario:\n\n${stockErrors.join('\n')}\n\nPor favor retire o reduzca el producto.`);
+        setIsProcessingPos(false);
+        return;
+      }
+
+      // 2. Adjust stock levels in Firestore database automatically
+      for (const item of posCart) {
+        const dbItem = inventoryItems.find(it => it.id === item.productId);
+        if (dbItem) {
+          const originalStock = dbItem.stock || 0;
+          const updatedStock = Math.max(0, originalStock - item.quantity);
+          const updatedSold = (dbItem.totalSold || 0) + item.quantity;
+          const updatedIncome = (dbItem.salesIncome || 0) + (item.quantity * item.price);
+
+          await updateInventoryItem(user.uid, item.productId, {
+            stock: updatedStock,
+            totalSold: updatedSold,
+            salesIncome: updatedIncome
+          });
+        }
+      }
+
+      // 3. Register financial transaction in cash flow ledger 
+      const generatedCode = `POS-${Math.floor(100000 + Math.random() * 900000)}`;
+      await addTransaction(user.uid, {
+        amount: posGrandTotal,
+        category: 'Otros',
+        description: `Cobro en POS: Factura ${generatedCode} para ${posClientName}`,
+        date: new Date().toISOString(),
+        type: 'income'
+      });
+
+      // 4. Record as an Archived Invoice in the local invoice list so they have a backup print voucher
+      const convertedItems: InvoiceItem[] = posCart.map(item => ({
+        id: item.id,
+        productId: item.productId,
+        description: item.name,
+        quantity: item.quantity,
+        price: item.price
+      }));
+
+      const newHistoryInvoice: SavedInvoice = {
+        id: 'inv-' + Date.now(),
+        invoiceNumber: generatedCode,
+        clientName: posClientName,
+        clientRnc: posClientRnc,
+        clientEmail: '',
+        issueDate: new Date().toISOString().split('T')[0],
+        dueDate: new Date().toISOString().split('T')[0],
+        taxRate: posTaxRate,
+        discount: posDiscount,
+        currency: currency,
+        status: 'paid', // Instant checkout invoices are fully paid
+        items: convertedItems,
+        issuerName: issuerName,
+        issuerRnc: issuerRnc,
+        issuerAddress: issuerAddress,
+        issuerPhone: issuerPhone,
+        issuerEmail: issuerEmail,
+        subtotal: posSubtotal,
+        taxAmount: posTaxAmount,
+        grandTotal: posGrandTotal
+      };
+
+      const updatedHistory = [newHistoryInvoice, ...savedInvoices];
+      setSavedInvoices(updatedHistory);
+
+      // Save modal state details to show user beautiful receipt details
+      setPosSuccessModal({
+        invoiceNumber: generatedCode,
+        clientName: posClientName,
+        totalItems: posCart.reduce((sum, item) => sum + item.quantity, 0),
+        subtotal: posSubtotal,
+        taxAmount: posTaxAmount,
+        grandTotal: posGrandTotal,
+        itemsSummary: posCart.map(item => ({
+          productId: item.productId,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity
+        }))
+      });
+
+      // Clear basket/cart
+      setPosCart([]);
+      setPosClientName('Cliente General POS');
+      setPosClientRnc('');
+      setPosDiscount(0);
+    } catch (err) {
+      console.error("Error al procesar el checkout POS:", err);
+      alert("Ocurrió un error guardando y descontando del almacén. Por favor contacte soporte.");
+    } finally {
+      setIsProcessingPos(false);
+    }
+  };
+
+  const handlePrintModalReceipt = () => {
+    if (!posSuccessModal) return;
+    try {
+      const pWin = window.open('', '_blank');
+      if (pWin) {
+        pWin.document.write(`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>Recibo ${posSuccessModal.invoiceNumber}</title>
+              <meta charset="utf-8">
+              <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+              <script src="https://cdn.tailwindcss.com"></script>
+              <style>
+                body { font-family: 'Space Grotesk', sans-serif; }
+                .ticket { font-family: 'JetBrains Mono', monospace; width: 80mm; padding: 5px; }
+              </style>
+            </head>
+            <body class="bg-zinc-100 p-8 flex justify-center">
+              <div class="bg-white p-6 rounded-2xl shadow-md border border-zinc-250 max-w-sm">
+                <div class="text-center border-b border-dashed border-zinc-200 pb-4 mb-4">
+                  <h2 class="font-bold text-sm tracking-tight">\${issuerName || 'Financiera Nova'}</h2>
+                  <p class="text-[10px] text-zinc-500">\${issuerAddress || 'Santo Domingo, RD'}</p>
+                  <p class="text-[9px] text-zinc-400">RNC: \${issuerRnc || '1-01-88432-1'}</p>
+                  <p class="text-xs font-black text-red-800 mt-2">\${posSuccessModal.invoiceNumber}</p>
+                </div>
+                <div class="text-xs space-y-2 mb-4">
+                  <p><strong>Cliente:</strong> \${posSuccessModal.clientName}</p>
+                  <p><strong>Fecha:</strong> \${new Date().toLocaleDateString()} \${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                </div>
+                <table class="w-full text-xs mb-4">
+                  <thead>
+                    <tr class="border-b border-zinc-200">
+                      <th class="text-left pb-1 font-bold">Item</th>
+                      <th class="text-center pb-1">Cant.</th>
+                      <th class="text-right pb-1">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    \${posSuccessModal.itemsSummary.map((item: any) => \`
+                      <tr>
+                        <td class="py-1 truncate max-w-[150px] font-medium">\${item.name}</td>
+                        <td class="py-1 text-center font-bold">\${item.quantity}</td>
+                        <td class="py-1 text-right font-black">\${currency} \${(item.quantity * item.price).toLocaleString()}</td>
+                      </tr>
+                    \`).join('')}
+                  </tbody>
+                </table>
+                <div class="border-t border-dashed border-zinc-200 pt-3 space-y-1.5 text-xs">
+                  <div class="flex justify-between">
+                    <span>Subtotal:</span>
+                    <span>\${currency} \${posSuccessModal.subtotal.toLocaleString()}</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span>ITBIS (\${posTaxRate}%):</span>
+                    <span>\${currency} \${posSuccessModal.taxAmount.toLocaleString()}</span>
+                  </div>
+                  <div class="flex justify-between font-black text-red-800 pt-1.5 border-t border-zinc-200">
+                    <span>TOTAL:</span>
+                    <span>\${currency} \${posSuccessModal.grandTotal.toLocaleString()}</span>
+                  </div>
+                </div>
+                <div class="text-center mt-6 pt-4 border-t border-dashed border-zinc-200">
+                  <p class="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">¡Gracias por su compra!</p>
+                  <p class="text-[8px] text-zinc-400 mt-1">Transacción registrada exitosamente.</p>
+                </div>
+              </div>
+            </body>
+          </html>
+        `);
+        pWin.document.close();
+        setTimeout(() => pWin.print(), 500);
+      } else {
+        window.print();
+      }
+    } catch (err) {
+      console.warn("Popup blocked, executing fallback print:", err);
+      window.print();
+    }
+  };
+
   // Handlers
+  const handleProductSelectChange = (productId: string) => {
+    setSelectedProductId(productId);
+    if (!productId) {
+      setNewItemDesc('');
+      setNewItemPrice(0);
+      return;
+    }
+    const found = inventoryItems.find(it => it.id === productId);
+    if (found) {
+      setNewItemDesc(found.name);
+      setNewItemPrice(found.price || found.value || 0);
+    }
+  };
+
   const handleAddItem = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newItemDesc || newItemPrice <= 0 || newItemQty <= 0) return;
     
-    setItems([
-      ...items,
-      {
-        id: Math.random().toString(),
-        description: newItemDesc,
-        quantity: Number(newItemQty),
-        price: Number(newItemPrice)
+    // Enforce billing stock checking limit
+    if (isAddingProductMode && selectedProductId) {
+      const found = inventoryItems.find(it => it.id === selectedProductId);
+      if (found) {
+        const currentStock = found.stock || 0;
+        const alreadyAddedQty = items
+          .filter(it => it.productId === selectedProductId)
+          .reduce((sum, item) => sum + item.quantity, 0);
+
+        if (alreadyAddedQty + newItemQty > currentStock) {
+          alert(`⚠️ Error: No puede agregar esa cantidad.\n\nStock disponible en almacén: ${currentStock} unidades.\nYa ha agregado: ${alreadyAddedQty} unidades.\nCantidad propuesta: ${newItemQty} unidades.`);
+          return;
+        }
       }
-    ]);
+    }
+
+    const itemProductId = isAddingProductMode && selectedProductId ? selectedProductId : undefined;
+    
+    // Check if we can merge item
+    const existingIndex = itemProductId 
+      ? items.findIndex(it => it.productId === itemProductId)
+      : -1;
+
+    if (existingIndex >= 0) {
+      const updated = [...items];
+      updated[existingIndex] = {
+        ...updated[existingIndex],
+        quantity: updated[existingIndex].quantity + Number(newItemQty)
+      };
+      setItems(updated);
+    } else {
+      setItems([
+        ...items,
+        {
+          id: 'item-' + Date.now() + Math.random().toString().substring(2, 6),
+          productId: itemProductId,
+          description: newItemDesc,
+          quantity: Number(newItemQty),
+          price: Number(newItemPrice)
+        }
+      ]);
+    }
     
     // reset input
+    setSelectedProductId('');
     setNewItemDesc('');
     setNewItemQty(1);
     setNewItemPrice(0);
   };
 
   const handleRemoveItem = (id: string) => {
-    if (items.length === 1) {
-      alert('La factura debe tener al menos un ítem.');
-      return;
-    }
     setItems(items.filter(item => item.id !== id));
   };
 
@@ -358,6 +796,12 @@ export default function Billing() {
     }
   };
 
+  const selectedProduct = isAddingProductMode && selectedProductId 
+    ? inventoryItems.find(it => it.id === selectedProductId)
+    : null;
+    
+  const currentStock = selectedProduct ? (selectedProduct.stock || 0) : 0;
+
   return (
     <div id="billing-container" className="space-y-8">
       {/* CSS rules to completely style print view cleanly (Hiding sidebar, header, buttons) */}
@@ -425,7 +869,36 @@ export default function Billing() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
+      {/* Subtab Navigation Selector */}
+      <div className="flex gap-2 border-b border-zinc-200 pb-0.5 no-print mb-4">
+        <button
+          onClick={() => setBillingSubTab('pos_calculator')}
+          className={cn(
+            "pb-3 px-4 text-xs sm:text-sm font-black border-b-2 transition-all flex items-center gap-2",
+            billingSubTab === 'pos_calculator' 
+              ? "border-red-800 text-red-800" 
+              : "border-transparent text-zinc-500 hover:text-zinc-800"
+          )}
+        >
+          <Boxes className="w-4 h-4 text-red-800" />
+          🛍️ Cálculo y Facturación Almacén
+        </button>
+        <button
+          onClick={() => setBillingSubTab('classic_billing')}
+          className={cn(
+            "pb-3 px-4 text-xs sm:text-sm font-black border-b-2 transition-all flex items-center gap-2",
+            billingSubTab === 'classic_billing' 
+              ? "border-red-800 text-red-800" 
+              : "border-transparent text-zinc-500 hover:text-zinc-800"
+          )}
+        >
+          <FileText className="w-4 h-4" />
+          📄 Factura Formal / Servicios Libres
+        </button>
+      </div>
+
+      {billingSubTab === 'classic_billing' ? (
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
         {/* Editor Form (Left Panel) */}
         <div className="xl:col-span-6 space-y-6">
           {/* Issuer details (Tus Datos / Emisor) */}
@@ -590,50 +1063,151 @@ export default function Billing() {
               Ítems y Conceptos Facturados
             </h3>
 
+            <div className="flex gap-1 bg-zinc-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddingProductMode(true);
+                  setSelectedProductId('');
+                  setNewItemDesc('');
+                  setNewItemPrice(0);
+                  setNewItemQty(1);
+                }}
+                className={cn(
+                  "flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5",
+                  isAddingProductMode ? "bg-white text-zinc-800 shadow-sm" : "text-zinc-500 hover:text-zinc-800"
+                )}
+              >
+                <Boxes className="w-3.5 h-3.5 text-red-800" />
+                Producto de Almacén
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddingProductMode(false);
+                  setSelectedProductId('');
+                  setNewItemDesc('');
+                  setNewItemPrice(0);
+                  setNewItemQty(1);
+                }}
+                className={cn(
+                  "flex-1 py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5",
+                  !isAddingProductMode ? "bg-white text-zinc-800 shadow-sm" : "text-zinc-500 hover:text-zinc-800"
+                )}
+              >
+                <FileText className="w-3.5 h-3.5 text-zinc-500" />
+                Concepto Manual / Servicio
+              </button>
+            </div>
+
             <form onSubmit={handleAddItem} className="bg-zinc-50/50 p-4 rounded-2xl border border-zinc-150 space-y-3">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">Agregar Concepto</p>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-red-800">
+                {isAddingProductMode ? 'Vender Producto en Factura' : 'Agregar Cargo Profesional'}
+              </p>
               
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
-                <div className="sm:col-span-6">
-                  <label className="block text-[9px] font-bold text-zinc-450 uppercase mb-1">Descripción del concepto</label>
-                  <input 
-                    type="text" 
-                    placeholder="Ej: Alquiler Local Comercial Naco"
-                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 outline-none"
-                    value={newItemDesc}
-                    onChange={(e) => setNewItemDesc(e.target.value)}
-                  />
-                </div>
+                {isAddingProductMode ? (
+                  <div className="sm:col-span-6">
+                    <label className="block text-[9px] font-bold text-zinc-450 uppercase mb-1">Seleccionar Producto *</label>
+                    <select
+                      value={selectedProductId}
+                      onChange={(e) => handleProductSelectChange(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 outline-none font-bold text-zinc-800"
+                    >
+                      <option value="">-- Elija un Producto Registrado --</option>
+                      {inventoryItems.map((prod) => (
+                        <option key={prod.id} value={prod.id} disabled={(prod.stock || 0) <= 0}>
+                          {prod.name} (Stock: {prod.stock || 0} c/u • {currency} {(prod.price || prod.value || 0).toLocaleString()})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="sm:col-span-6">
+                    <label className="block text-[9px] font-bold text-zinc-450 uppercase mb-1">Descripción del concepto *</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej: Alquiler de local o consulta..."
+                      className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 outline-none"
+                      value={newItemDesc}
+                      onChange={(e) => setNewItemDesc(e.target.value)}
+                    />
+                  </div>
+                )}
+                
                 <div className="sm:col-span-2">
                   <label className="block text-[9px] font-bold text-zinc-450 uppercase mb-1">Cant.</label>
                   <input 
                     type="number" 
                     min="1"
-                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 outline-none"
+                    max={selectedProduct ? currentStock : undefined}
+                    className={cn(
+                      "w-full px-3 py-2 bg-white border rounded-xl text-xs outline-none font-semibold",
+                      selectedProduct && newItemQty > currentStock ? "border-red-500 text-red-700 font-black" : "border-zinc-200"
+                    )}
                     value={newItemQty}
                     onChange={(e) => setNewItemQty(Number(e.target.value))}
                   />
                 </div>
+                
                 <div className="sm:col-span-3">
-                  <label className="block text-[9px] font-bold text-zinc-450 uppercase mb-1">Precio Unit. ($)</label>
+                  <label className="block text-[9px] font-bold text-zinc-450 uppercase mb-1">Precio Unit. ({currency})</label>
                   <input 
                     type="number" 
                     min="0"
                     placeholder="0"
-                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 outline-none"
+                    className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 outline-none font-bold"
                     value={newItemPrice || ''}
                     onChange={(e) => setNewItemPrice(Number(e.target.value))}
                   />
                 </div>
+                
                 <div className="sm:col-span-1">
                   <button 
                     type="submit"
-                    className="w-full p-2 bg-red-800 hover:bg-red-900 text-white rounded-xl flex items-center justify-center transition-all h-9"
-                    title="Añadir ítem"
+                    disabled={selectedProduct && newItemQty > currentStock}
+                    className={cn(
+                      "w-full p-2 text-white rounded-xl flex items-center justify-center transition-all h-9",
+                      selectedProduct && newItemQty > currentStock 
+                        ? "bg-zinc-350 cursor-not-allowed text-zinc-400" 
+                        : "bg-red-800 hover:bg-red-900"
+                    )}
+                    title={selectedProduct && newItemQty > currentStock ? "No puede vender más que el inventario" : "Añadir concepto"}
                   >
                     <Plus className="w-4 h-4" />
                   </button>
                 </div>
+
+                {selectedProduct && (
+                  <div className="sm:col-span-12 mt-1 flex items-center justify-between bg-zinc-50 border border-zinc-150 p-2.5 rounded-xl">
+                    <div className="flex items-center gap-2">
+                      {newItemQty > currentStock ? (
+                        <AlertCircle className="w-4.5 h-4.5 text-red-650 animate-bounce" />
+                      ) : (
+                        <CheckCircle2 className="w-4.5 h-4.5 text-emerald-600" />
+                      )}
+                      <div className="text-left">
+                        <p className="text-[10px] text-zinc-400 uppercase font-black tracking-wide">Control de Existencias:</p>
+                        <p className={cn(
+                          "text-xs font-black",
+                          newItemQty > currentStock ? "text-red-750" : "text-emerald-750"
+                        )}>
+                           {currentStock} unidades registradas en su inventario.
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {newItemQty > currentStock ? (
+                      <span className="text-[10px] text-red-800 font-extrabold bg-red-50 border border-red-150 rounded-lg px-2 py-0.5">
+                        ⚠️ No puede vender más que la cantidad disponible ({currentStock})
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-emerald-800 font-extrabold bg-emerald-50 border border-emerald-150 rounded-lg px-2 py-0.5">
+                        ✓ Rango Válido
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </form>
 
@@ -862,6 +1436,20 @@ export default function Billing() {
           </div>
         </div>
       </div>
+      ) : (
+        <PosCalculator 
+          user={user}
+          inventoryItems={inventoryItems}
+          savedInvoices={savedInvoices}
+          setSavedInvoices={setSavedInvoices}
+          currency={currency}
+          issuerName={issuerName}
+          issuerRnc={issuerRnc}
+          issuerAddress={issuerAddress}
+          issuerPhone={issuerPhone}
+          issuerEmail={issuerEmail}
+        />
+      )}
 
       {/* Saved Invoices List History - Real Persistence */}
       <div className="glass-card bg-white p-6 border border-zinc-150 rounded-3xl shadow-sm space-y-6 mt-8 no-print" id="saved-invoices-history-panel">
