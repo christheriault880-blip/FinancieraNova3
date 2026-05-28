@@ -249,11 +249,25 @@ export const getSystemSettings = async (): Promise<any | null> => {
   return null;
 };
 
+export const subscribeToSystemSettings = (callback: (settings: any) => void) => {
+  const path = 'settings/credentials';
+  return onSnapshot(doc(db, path), (snapshot) => {
+    if (snapshot.exists()) {
+      callback(snapshot.data());
+    } else {
+      callback(null);
+    }
+  }, (error) => {
+    console.error('Error listening to system settings in Firestore:', error);
+  });
+};
+
 export const saveSystemSettings = async (settings: { 
   emailjs_service_id?: string;
   emailjs_template_id?: string;
   emailjs_public_key?: string;
   gemini_api_key?: string;
+  maintenanceMode?: boolean;
 }) => {
   const path = 'settings/credentials';
   try {

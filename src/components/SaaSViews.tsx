@@ -238,3 +238,46 @@ export function SubscriptionSuspendedView() {
     </div>
   );
 }
+
+export function GlobalMaintenanceView() {
+  return (
+    <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.3 }}
+        className="max-w-md w-full bg-white border border-zinc-150 p-6 sm:p-10 rounded-3xl shadow-xl space-y-6 text-center"
+      >
+        <div className="w-16 h-16 bg-zinc-900 text-white mx-auto rounded-2xl flex items-center justify-center shadow-lg animate-pulse">
+          <ShieldAlert className="w-8 h-8" />
+        </div>
+
+        <div className="space-y-2">
+          <h1 className="text-2xl font-black text-zinc-900 tracking-tight">Servidor en Mantenimiento</h1>
+          <p className="text-zinc-650 font-medium text-xs leading-relaxed">
+            Nuestros ingenieros están realizando labores de mantenimiento global y optimización en los servidores principales de <strong>Financiera Nova</strong>. El sistema estará disponible nuevamente muy pronto.
+          </p>
+        </div>
+
+        <div className="bg-zinc-50 border border-zinc-200 p-4 rounded-2xl text-left space-y-2 text-xs text-zinc-605">
+          <p className="font-bold text-zinc-800 text-[11px] uppercase tracking-wider">¿Qué significa esto para ti?</p>
+          <ul className="list-disc pl-4 space-y-1.5 text-zinc-500 text-[11px]">
+            <li>Tus datos, transacciones e información se encuentran totalmente a salvo y encriptados en nuestros servidores.</li>
+            <li>No se perderá ningún registro ni cálculo realizado antes del mantenimiento.</li>
+            <li>El acceso seguro estará en línea de inmediato tras completar las verificaciones.</li>
+          </ul>
+        </div>
+
+        <div className="pt-2 border-t border-zinc-100">
+          <button
+            onClick={() => logout()}
+            className="text-xs font-bold text-zinc-500 hover:text-zinc-800 flex items-center gap-1.5 mx-auto transition-colors focus:outline-none"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Cerrar Sesión actual / Volver
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}

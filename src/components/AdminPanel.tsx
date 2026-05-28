@@ -25,12 +25,13 @@ import { formatCurrency } from '../lib/utils';
 import { 
   getAllUserProfiles, 
   updateUserProfileByAdmin, 
-  releaseRegisteredPhone 
+  releaseRegisteredPhone,
+  saveSystemSettings 
 } from '../services/firestoreService';
 import { UserProfile } from '../types';
 
 export default function AdminPanel() {
-  const { transactions, profile } = useAuth();
+  const { transactions, profile, isMaintenanceModeActive } = useAuth();
   const [password, setPassword] = useState('');
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [error, setError] = useState('');
@@ -44,6 +45,23 @@ export default function AdminPanel() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState({ text: '', type: 'success' });
+
+  // Saving state for maintenance mode
+  const [savingMaintenance, setSavingMaintenance] = useState(false);
+
+  const handleToggleMaintenance = async () => {
+    if (savingMaintenance) return;
+    setSavingMaintenance(true);
+    try {
+      await saveSystemSettings({ maintenanceMode: !isMaintenanceModeActive });
+      showFeedback(`Mantenimiento Global ${!isMaintenanceModeActive ? 'Activado' : 'Desactivado'} con éxito.`, 'success');
+    } catch (err) {
+      console.error(err);
+      showFeedback('Error al actualizar el estado de mantenimiento.', 'error');
+    } finally {
+      setSavingMaintenance(false);
+    }
+  };
 
   // Custom date state for manually editing date
   const [customExpiryDate, setCustomExpiryDate] = useState('');
@@ -707,8 +725,15 @@ export default function AdminPanel() {
                 <p className="text-xs font-bold text-zinc-900">Mantenimiento Global</p>
                 <p className="text-[10px] text-zinc-500">Muestra pantalla de "Sitio en mantenimiento" temporal a suscriptores.</p>
               </div>
-              <div className="relative inline-flex h-6 w-11 items-center rounded-full bg-zinc-200 cursor-pointer">
-                <span className="inline-block h-4 w-4 translate-x-1 transform rounded-full bg-white transition" />
+              <div 
+                onClick={handleToggleMaintenance}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full cursor-pointer transition-colors ${
+                  isMaintenanceModeActive ? 'bg-red-850' : 'bg-zinc-200'
+                } ${savingMaintenance ? 'opacity-50 cursor-wait' : ''}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  isMaintenanceModeActive ? 'translate-x-6' : 'translate-x-1'
+                }`} />
               </div>
             </div>
           </div>

@@ -7,7 +7,8 @@ import {
   createUserProfile, 
   subscribeToTransactions, 
   subscribeToGoals, 
-  updateUserProfileByAdmin 
+  updateUserProfileByAdmin,
+  subscribeToSystemSettings
 } from './services/firestoreService';
 
 interface AuthContextType {
@@ -21,6 +22,7 @@ interface AuthContextType {
   isPhoneMissing: boolean;
   isSubExpired: boolean;
   isSubSuspended: boolean;
+  isMaintenanceModeActive: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -31,6 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [goals, setGoals] = useState<SavingGoal[]>([]);
+  const [isMaintenanceModeActive, setIsMaintenanceModeActive] = useState(false);
 
   const isAdmin = user?.email === 'christheriault880@gmail.com';
 
@@ -55,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let unsubscribeProfile: (() => void) | null = null;
     let unsubscribeTransactions: (() => void) | null = null;
     let unsubscribeGoals: (() => void) | null = null;
+    let unsubscribeSystemSettings: (() => void) | null = null;
 
     const cleanupSubscriptions = () => {
       if (unsubscribeProfile) {
@@ -69,6 +73,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         unsubscribeGoals();
         unsubscribeGoals = null;
       }
+      if (unsubscribeSystemSettings) {
+        unsubscribeSystemSettings();
+        unsubscribeSystemSettings = null;
+      }
     };
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -76,6 +84,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(firebaseUser);
       
       if (firebaseUser) {
+        // Subscribe to global system settings (under firestore doc systems/credentials)
+        unsubscribeSystemSettings = subscribeToSystemSettings((settings) => {
+          if (settings && typeof settings.maintenanceMode === 'boolean') {
+            setIsMaintenanceModeActive(settings.maintenanceMode);
+          } else {
+            setIsMaintenanceModeActive(false);
+          }
+        });
+
         // Subscribe to profile
         unsubscribeProfile = subscribeToUserProfile(firebaseUser.uid, async (p) => {
           try {
@@ -147,7 +164,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isSaaSAccessGranted,
       isPhoneMissing,
       isSubExpired,
-      isSubSuspended
+      isSubSuspended,
+      isMaintenanceModeActive
     }}>
       {children}
     </AuthContext.Provider>

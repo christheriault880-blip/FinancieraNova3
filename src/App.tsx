@@ -49,7 +49,7 @@ import Agenda from './components/Agenda';
 import NotificationsPopover from './components/NotificationsPopover';
 import Loans from './components/Loans';
 import PaymentReminders from './components/PaymentReminders';
-import { PhoneRegistrationView, SubscriptionExpiredView, SubscriptionSuspendedView } from './components/SaaSViews';
+import { PhoneRegistrationView, SubscriptionExpiredView, SubscriptionSuspendedView, GlobalMaintenanceView } from './components/SaaSViews';
 import { BellRing } from 'lucide-react';
 
 type Tab = 'dashboard' | 'transactions' | 'savings' | 'ai' | 'profile' | 'admin' | 'inventory' | 'billing' | 'pos_billing' | 'agenda' | 'loans' | 'reminders';
@@ -119,8 +119,8 @@ const Logo = ({ className }: { className?: string }) => (
 );
 
 export default function App() {
-  const { user, loading, isAdmin, isPhoneMissing, isSubExpired, isSubSuspended } = useAuth();
-  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+  const { user, loading, isAdmin, isPhoneMissing, isSubExpired, isSubSuspended, isMaintenanceModeActive } = useAuth();
+  const [activeTab, setActiveTab ] = useState<Tab>('dashboard');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTx, setNewTx] = useState({
     description: '',
@@ -489,6 +489,10 @@ export default function App() {
   }
 
   // INTERCEPT TO COMPLY WITH SaaS REQUIREMENT SCREEN OVERLAYS
+  if (isMaintenanceModeActive && !isAdmin) {
+    return <GlobalMaintenanceView />;
+  }
+
   if (isPhoneMissing) {
     return <PhoneRegistrationView />;
   }
@@ -557,6 +561,11 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3">
+            {isMaintenanceModeActive && isAdmin && (
+              <span className="px-2.5 py-1 bg-red-100 text-red-800 text-[10px] font-black rounded-lg uppercase tracking-wider animate-pulse" title="Mantenimiento global activo para suscriptores">
+                Mantenimiento Activo
+              </span>
+            )}
             <NotificationsPopover onTabChange={setActiveTab} />
             <button 
               onClick={() => setIsModalOpen(true)}
