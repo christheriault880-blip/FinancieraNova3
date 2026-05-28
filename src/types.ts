@@ -86,3 +86,23 @@ export interface DailySalesSummary {
   productsSold: SoldProductDetail[];
 }
 
+export interface Loan {
+  id: string;
+  uid: string; // Owner's UID
+  partnerRnc: string;
+  partnerName: string;
+  hasGuarantor: boolean;
+  guarantorName?: string;
+  amount: number;
+  taxRate: number; // Impuesto / Interés (%)
+  moraValue: number; // Mora
+  moraType: 'fixed' | 'percentage'; // Fijo o Porcentual
+  inventoryItemId?: string; // ID del activo de inventario vinculado
+  inventoryItemName?: string; // Nombre del activo vinculado
+  inventoryItemQty?: number; // Cantidad de unidades vinculadas/entregadas
+  status?: 'pending' | 'paid'; // Estado del préstamo
+  date: string;
+  dueDate?: string; // Fecha de vencimiento
+  notes?: string;
+}
+

@@ -21,34 +21,15 @@ import {
 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 import { useAuth } from '../AuthContext';
-import { subscribeToInventory, updateInventoryItemNotes } from '../services/firestoreService';
-import { InventoryItem } from '../types';
-
-interface Loan {
-  id: string;
-  partnerRnc: string;
-  partnerName: string;
-  hasGuarantor: boolean;
-  guarantorName?: string;
-  amount: number;
-  taxRate: number; // Impuesto / Interés (%)
-  moraValue: number; // Mora
-  moraType: 'fixed' | 'percentage'; // Fijo o Porcentual
-  inventoryItemId?: string; // ID del activo de inventario vinculado
-  inventoryItemName?: string; // Nombre del activo vinculado
-  date: string;
-  notes?: string;
-}
+import { subscribeToInventory, updateInventoryItem, addTransaction, subscribeToLoans, addLoan, deleteLoanInFirestore, updateLoanInFirestore } from '../services/firestoreService';
+import { InventoryItem, Loan } from '../types';
 
 export default function Loans() {
   const { user } = useAuth();
   
   // States
-  const [loans, setLoans] = useState<Loan[]>(() => {
-    const saved = localStorage.getItem('nova_loans_list');
-    if (saved) return JSON.parse(saved);
-    return [];
-  });
+  const [loans, setLoans] = useState<Loan[]>([]);
+  const [loadingLoans, setLoadingLoans] = useState(true);
 
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [loadingInventory, setLoadingInventory] = useState(true);
@@ -67,12 +48,58 @@ export default function Loans() {
   const [moraValue, setMoraValue] = useState('500'); // Default mora/late fee
   const [moraType, setMoraType] = useState<'fixed' | 'percentage'>('fixed');
   const [selectedInventoryId, setSelectedInventoryId] = useState('');
+  const [selectedInventoryQty, setSelectedInventoryQty] = useState(1);
   const [notes, setNotes] = useState('');
+  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [dueDate, setDueDate] = useState('');
 
-  // Persist loans list to localStorage
+  // Confirmation state for operations to avoid blocked iframe dialogs
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [loanToMarkPaid, setLoanToMarkPaid] = useState<string | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [loanToDeleteId, setLoanToDeleteId] = useState<string | null>(null);
+
+  // Subscribe to real-time Loans list from Firestore
   useEffect(() => {
-    localStorage.setItem('nova_loans_list', JSON.stringify(loans));
-  }, [loans]);
+    if (!user) return;
+    const unsubscribe = subscribeToLoans(user.uid, async (data) => {
+      if (data.length === 0) {
+        // Migration check from localStorage
+        const saved = localStorage.getItem('nova_loans_list');
+        if (saved) {
+          try {
+            const localLoans: any[] = JSON.parse(saved);
+            if (localLoans.length > 0) {
+              console.log('Migrating local loans to firestore...');
+              for (const l of localLoans) {
+                await addLoan(user.uid, {
+                  partnerRnc: l.partnerRnc,
+                  partnerName: l.partnerName,
+                  hasGuarantor: l.hasGuarantor,
+                  guarantorName: l.guarantorName,
+                  amount: l.amount,
+                  taxRate: l.taxRate,
+                  moraValue: l.moraValue,
+                  moraType: l.moraType,
+                  inventoryItemId: l.inventoryItemId || null || undefined,
+                  inventoryItemName: l.inventoryItemName || null || undefined,
+                  date: l.date,
+                  dueDate: l.dueDate || null || undefined,
+                  notes: l.notes || null || undefined
+                });
+              }
+              localStorage.removeItem('nova_loans_list');
+            }
+          } catch (e) {
+            console.error('Error migrating local loans:', e);
+          }
+        }
+      }
+      setLoans(data);
+      setLoadingLoans(false);
+    });
+    return () => unsubscribe();
+  }, [user]);
 
   // Subscribe to real space inventory
   useEffect(() => {
@@ -84,10 +111,9 @@ export default function Loans() {
     return () => unsubscribe();
   }, [user]);
 
-  // Filter out inventory items that are currently "En Préstamo" (already locked)
-  // We identify them by reading the `[EN PRÉSTAMO]` prefix in notes
+  // Filter inventory items that have positive stock (available to be given/loaned out)
   const availableInventoryItems = inventoryItems.filter(item => {
-    return !item.notes?.includes('[EN PRÉSTAMO]');
+    return (item.stock ?? 0) > 0;
   });
 
   // Handle adding a new Loan
@@ -101,8 +127,7 @@ export default function Loans() {
       linkedItem = inventoryItems.find(item => item.id === selectedInventoryId);
     }
 
-    const newLoan: Loan = {
-      id: 'loan-' + Math.random().toString(36).substr(2, 9),
+    const loanData: Omit<Loan, 'id' | 'uid'> = {
       partnerRnc: partnerRnc.trim(),
       partnerName: partnerName.trim(),
       hasGuarantor,
@@ -111,28 +136,50 @@ export default function Loans() {
       taxRate: Number(taxRate) || 0,
       moraValue: Number(moraValue) || 0,
       moraType,
-      inventoryItemId: linkedItem?.id,
-      inventoryItemName: linkedItem?.name,
-      date: new Date().toISOString().split('T')[0],
+      inventoryItemId: linkedItem?.id || undefined,
+      inventoryItemName: linkedItem?.name || undefined,
+      inventoryItemQty: linkedItem ? selectedInventoryQty : undefined,
+      date: date || new Date().toISOString().split('T')[0],
+      dueDate: dueDate || undefined,
       notes: notes.trim() || undefined
     };
 
-    // If an inventory item was selected, let's update its notes in Firestore database
-    if (linkedItem) {
-      try {
-        const originalNotes = linkedItem.notes || '';
-        const newNotesPrefix = `[EN PRÉSTAMO] Vinculado al socio ${partnerName} (RNC: ${partnerRnc}). `;
-        const updatedNotes = originalNotes 
-          ? `${newNotesPrefix}${originalNotes}` 
-          : newNotesPrefix;
-        
-        await updateInventoryItemNotes(user.uid, linkedItem.id, updatedNotes);
-      } catch (err) {
-        console.error('Error al actualizar notas del activo en firebase:', err);
-      }
-    }
+    try {
+      // 1. Save new loan to Firestore database
+      await addLoan(user.uid, loanData);
 
-    setLoans([newLoan, ...loans]);
+      // 2. If an inventory item was selected, we update its stock level in Firestore
+      if (linkedItem) {
+        try {
+          const currentStock = linkedItem.stock || 0;
+          const updatedStock = Math.max(0, currentStock - selectedInventoryQty);
+          const updatedSold = (linkedItem.totalSold || 0) + selectedInventoryQty;
+          const itemPrice = linkedItem.price || linkedItem.value || 0;
+          const updatedIncome = (linkedItem.salesIncome || 0) + (itemPrice * selectedInventoryQty);
+
+          await updateInventoryItem(user.uid, linkedItem.id, {
+            stock: updatedStock,
+            totalSold: updatedSold,
+            salesIncome: updatedIncome
+          });
+
+          // Register transaction in ledger for transparency
+          await addTransaction(user.uid, {
+            amount: Number(amount),
+            category: 'Otros',
+            description: `Garantía de Préstamo - ${selectedInventoryQty}x ${linkedItem.name} entregado a socio ${partnerName}`,
+            date: new Date().toISOString(),
+            type: 'income'
+          });
+        } catch (err) {
+          console.error('Error al descontar activo para el préstamo:', err);
+        }
+      }
+    } catch (err) {
+      console.error('Error al crear el préstamo en Firestore:', err);
+      alert('Error al guardar el préstamo. Por favor intente nuevamente.');
+      return;
+    }
     
     // Close & Reset
     setShowForm(false);
@@ -145,41 +192,34 @@ export default function Loans() {
     setMoraValue('500');
     setMoraType('fixed');
     setSelectedInventoryId('');
+    setSelectedInventoryQty(1);
     setNotes('');
+    setDate(new Date().toISOString().split('T')[0]);
+    setDueDate('');
   };
 
-  // Handle removing a Loan ("X" on the side)
-  const handleDeleteLoan = async (loanId: string) => {
-    if (!user) return;
-    const confirmDelete = window.confirm('¿Está seguro de eliminar o dar por finalizado este préstamo?');
-    if (!confirmDelete) return;
+  // Handle removing a Loan
+  const handleDeleteLoan = (loanId: string) => {
+    setLoanToDeleteId(loanId);
+    setShowDeleteModal(true);
+  };
 
-    const loanToRemove = loans.find(l => l.id === loanId);
-    
-    // If it had a linked inventory item, let's unlock it!
-    if (loanToRemove && loanToRemove.inventoryItemId) {
-      const dbItem = inventoryItems.find(item => item.id === loanToRemove.inventoryItemId);
-      if (dbItem) {
-        try {
-          // Remove the "[EN PRÉSTAMO] ..." text from notes to restore original notes
-          const cleanedNotes = dbItem.notes 
-            ? dbItem.notes.replace(/\[EN PRÉSTAMO\][^\.]*\.\s?/, '') 
-            : '';
-          
-          await updateInventoryItemNotes(user.uid, dbItem.id, cleanedNotes);
-        } catch (err) {
-          console.error('Error al liberar activo del inventario:', err);
-        }
-      }
-    }
-
-    setLoans(loans.filter(l => l.id !== loanId));
+  // Handle marking a Loan as paid in full
+  const handleMarkAsPaid = (loanId: string) => {
+    setLoanToMarkPaid(loanId);
+    setShowConfirmModal(true);
   };
 
   // Calculate stats
   const totalLoanedCapital = loans.reduce((sum, l) => sum + l.amount, 0);
-  const activeLoansCount = loans.length;
-  const itemsOnLoanCount = loans.filter(l => l.inventoryItemId).length;
+  const pendingBalance = loans.filter(l => l.status !== 'paid').reduce((sum, l) => sum + l.amount, 0);
+  const activeLoansCount = loans.filter(l => l.status !== 'paid').length;
+  const itemsOnLoanCount = loans.filter(l => l.status !== 'paid').reduce((sum, l) => {
+    if (l.inventoryItemId) {
+      return sum + (l.inventoryItemQty || 1);
+    }
+    return sum;
+  }, 0);
 
   const filteredLoans = loans.filter(l => {
     const term = searchTerm.toLowerCase();
@@ -227,10 +267,10 @@ export default function Loans() {
       </div>
 
       {/* Metrics Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="glass-card bg-white p-5 border border-zinc-150 rounded-2xl shadow-sm flex items-center justify-between">
           <div className="space-y-1">
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Capital de Cartera Otorgado</p>
+            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Cartera Otorgada Total</p>
             <p className="text-2xl font-black text-red-800">{formatCurrency(totalLoanedCapital)}</p>
           </div>
           <div className="p-3 bg-red-50 rounded-xl text-red-800">
@@ -240,7 +280,17 @@ export default function Loans() {
 
         <div className="glass-card bg-white p-5 border border-zinc-150 rounded-2xl shadow-sm flex items-center justify-between">
           <div className="space-y-1">
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Contratos de Préstamo Activos</p>
+            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Balance Pendiente</p>
+            <p className="text-2xl font-black text-amber-600">{formatCurrency(pendingBalance)}</p>
+          </div>
+          <div className="p-3 bg-amber-50 rounded-xl text-amber-600">
+            <Clock className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="glass-card bg-white p-5 border border-zinc-150 rounded-2xl shadow-sm flex items-center justify-between">
+          <div className="space-y-1">
+            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Préstamos Pendientes</p>
             <p className="text-2xl font-black text-zinc-950">{activeLoansCount}</p>
           </div>
           <div className="p-3 bg-zinc-50 rounded-xl text-zinc-700">
@@ -250,13 +300,13 @@ export default function Loans() {
 
         <div className="glass-card bg-white p-5 border border-zinc-150 rounded-2xl shadow-sm flex items-center justify-between">
           <div className="space-y-1">
-            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Activos de Inventario Cedidos</p>
-            <p className="text-lg font-black text-amber-800 flex items-center gap-1.5">
-              <Lock className="w-4 h-4 text-amber-600" />
-              {itemsOnLoanCount} bienes bloqueados
+            <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Activos en Garantía / Cedidos</p>
+            <p className="text-lg font-black text-zinc-800 flex items-center gap-1.5">
+              <Lock className="w-4 h-4 text-zinc-600" />
+              {itemsOnLoanCount} unidades
             </p>
           </div>
-          <div className="p-3 bg-amber-50 rounded-xl text-amber-800">
+          <div className="p-3 bg-zinc-50 rounded-xl text-zinc-800">
             <Boxes className="w-5 h-5" />
           </div>
         </div>
@@ -343,6 +393,29 @@ export default function Loans() {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Fecha de Emisión *</label>
+              <input 
+                type="date"
+                required
+                className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
+                value={date}
+                onChange={e => setDate(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Fecha de Vencimiento (Opcional)</label>
+              <input 
+                type="date"
+                className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
+                value={dueDate}
+                onChange={e => setDueDate(e.target.value)}
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-zinc-50 rounded-2xl border border-zinc-150">
             {/* Guarantor Setting */}
             <div className="space-y-3">
@@ -377,8 +450,11 @@ export default function Loans() {
             {/* Linkage with inventory setting */}
             <div className="space-y-3 border-t md:border-t-0 md:border-l border-zinc-200 pt-3 md:pt-0 md:pl-6">
               <div>
-                <span className="text-xs font-bold text-zinc-800 block">¿Prestar Activo Propio del Inventario?</span>
-                <span className="text-[10px] text-zinc-400 block">Bloqueará temporalmente el activo seleccionado en tu Inventario.</span>
+                <span className="text-xs font-black text-red-800 flex items-center gap-1 uppercase tracking-wide">
+                  <Boxes className="w-4 h-4 text-red-700" />
+                  ¿Vincular un Producto de tu Inventario al Préstamo?
+                </span>
+                <span className="text-[10px] text-zinc-400 block">Seleccione un activo físico o bien de su catálogo para bloquearlo en garantía durante la vigencia de este préstamo.</span>
               </div>
 
               {loadingInventory ? (
@@ -392,15 +468,97 @@ export default function Loans() {
                   <select
                     className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 outline-none"
                     value={selectedInventoryId}
-                    onChange={e => setSelectedInventoryId(e.target.value)}
+                    onChange={e => {
+                      const selId = e.target.value;
+                      setSelectedInventoryId(selId);
+                      setSelectedInventoryQty(1);
+                      if (selId) {
+                        const matched = availableInventoryItems.find(item => item.id === selId);
+                        if (matched) {
+                          // Automatically set the loan amount to the value of the active product!
+                          setAmount(String(matched.price || matched.value || ''));
+                        }
+                      }
+                    }}
                   >
-                    <option value="">-- No vincular activo --</option>
+                    <option value="">-- No vincular activo / producto --</option>
                     {availableInventoryItems.map(item => (
                       <option key={item.id} value={item.id}>
-                        {item.name} ({formatCurrency(item.value)}) ({item.category})
+                        {item.name} ({formatCurrency(item.value)}) (Stock: {item.stock ?? 0})
                       </option>
                     ))}
                   </select>
+
+                  {/* Quantity selection block */}
+                  {(() => {
+                    const selectedItemData = selectedInventoryId 
+                      ? availableInventoryItems.find(item => item.id === selectedInventoryId)
+                      : null;
+                    if (!selectedItemData) return null;
+
+                    return (
+                      <div className="mt-2.5 p-3 bg-red-50/50 border border-red-100 rounded-2xl space-y-2.5 animate-fade-in text-zinc-900">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-black text-red-900 uppercase tracking-wide">Cantidad de entrega:</span>
+                          <span className="text-[10px] text-zinc-500 font-bold">
+                            Disponible: <strong className="text-zinc-800 font-extrabold">{selectedItemData.stock ?? 1} unidades</strong>
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={selectedInventoryQty <= 1}
+                            onClick={() => {
+                              const newQty = Math.max(1, selectedInventoryQty - 1);
+                              setSelectedInventoryQty(newQty);
+                              const unitPrice = selectedItemData.price || selectedItemData.value || 0;
+                              setAmount(String(unitPrice * newQty));
+                            }}
+                            className="w-8 h-8 rounded-xl bg-white border border-zinc-200 text-zinc-800 font-black hover:bg-zinc-100 flex items-center justify-center disabled:opacity-40 transition-all text-sm active:scale-95 shadow-sm"
+                          >
+                            -
+                          </button>
+                          
+                          <input
+                            type="number"
+                            min="1"
+                            max={selectedItemData.stock ?? 1}
+                            className="w-16 text-center py-1.5 border border-zinc-200 rounded-xl text-xs font-black focus:outline-none focus:ring-1 focus:ring-red-800 bg-white"
+                            value={selectedInventoryQty}
+                            onChange={e => {
+                              const limit = selectedItemData.stock ?? 1;
+                              const newQty = Math.max(1, Math.min(limit, Number(e.target.value)));
+                              setSelectedInventoryQty(newQty);
+                              const unitPrice = selectedItemData.price || selectedItemData.value || 0;
+                              setAmount(String(unitPrice * newQty));
+                            }}
+                          />
+
+                          <button
+                            type="button"
+                            disabled={selectedInventoryQty >= (selectedItemData.stock ?? 1)}
+                            onClick={() => {
+                              const limit = selectedItemData.stock ?? 1;
+                              const newQty = Math.min(limit, selectedInventoryQty + 1);
+                              setSelectedInventoryQty(newQty);
+                              const unitPrice = selectedItemData.price || selectedItemData.value || 0;
+                              setAmount(String(unitPrice * newQty));
+                            }}
+                            className="w-8 h-8 rounded-xl bg-white border border-zinc-200 text-zinc-800 font-black hover:bg-zinc-100 flex items-center justify-center disabled:opacity-40 transition-all text-sm active:scale-95 shadow-sm"
+                          >
+                            +
+                          </button>
+
+                          <div className="ml-auto text-right pr-1">
+                            <span className="text-[9px] text-zinc-400 block font-bold uppercase tracking-wider">Subtotal Activo</span>
+                            <span className="text-xs font-black text-red-800">
+                              {formatCurrency((selectedItemData.price || selectedItemData.value || 0) * selectedInventoryQty)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -493,10 +651,20 @@ export default function Loans() {
                       </>
                     )}
                   </span>
+
+                  {/* Status Badge */}
+                  <span className={cn(
+                    "px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider flex items-center gap-1 border",
+                    loan.status === 'paid'
+                      ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                      : "bg-amber-50 text-amber-800 border-amber-200"
+                  )}>
+                    {loan.status === 'paid' ? 'Pago Completo / Cobrado' : 'Pendiente de Pago'}
+                  </span>
                 </div>
 
                 {/* Main financial properties */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-2 border-t border-zinc-100 text-xs text-zinc-500 font-medium">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 pt-2 border-t border-zinc-100 text-xs text-zinc-500 font-medium">
                   <div>
                     <span className="text-[9px] text-zinc-400 font-bold uppercase tracking-wider block">Capital Prestado</span>
                     <strong className="text-base font-black text-red-800">{formatCurrency(loan.amount)}</strong>
@@ -520,18 +688,28 @@ export default function Loans() {
                     <span className="text-[9px] text-zinc-400 font-bold uppercase tracking-wider block">Fecha Emisión</span>
                     <span className="text-zinc-700 font-semibold">{loan.date}</span>
                   </div>
+
+                  <div>
+                    <span className="text-[9px] text-zinc-400 font-bold uppercase tracking-wider block">Vencimiento</span>
+                    <span className={cn(
+                      "font-semibold",
+                      loan.dueDate ? "text-red-800 font-black" : "text-zinc-500"
+                    )}>
+                      {loan.dueDate || 'No fijada'}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Linked inventory assets */}
                 {loan.inventoryItemId && (
-                  <div className="p-3 bg-amber-50/50 border border-amber-100 rounded-xl flex items-center justify-between text-xs font-semibold text-amber-900 mt-2 max-w-xl">
+                  <div className="p-3 bg-red-50 text-red-950 border border-red-100 rounded-xl flex items-center justify-between text-xs font-semibold mt-2 max-w-xl">
                     <div className="flex items-center gap-2">
-                      <Lock className="w-4 h-4 text-amber-600 animate-pulse" />
-                      <span>Activo Bloqueado en Inventario:</span>
-                      <strong className="text-amber-950 font-black decoration-dotted underline select-all">{loan.inventoryItemName}</strong>
+                      <Lock className="w-4 h-4 text-red-800" />
+                      <span>Unidades Vendidas / Entregadas:</span>
+                      <strong className="text-red-950 font-black decoration-dotted underline select-all">{loan.inventoryItemQty || 1}x {loan.inventoryItemName}</strong>
                     </div>
-                    <span className="text-[9px] uppercase tracking-wider font-extrabold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full border border-amber-200">
-                      En Préstamo
+                    <span className="text-[9px] uppercase tracking-wider font-extrabold bg-red-100 text-red-800 px-2 py-0.5 rounded-full border border-red-200">
+                      Entregado
                     </span>
                   </div>
                 )}
@@ -543,8 +721,18 @@ export default function Loans() {
                 )}
               </div>
 
-              {/* Action buttons (The X button to delete) */}
-              <div className="self-end md:self-center border-t md:border-t-0 pt-3 md:pt-0 border-zinc-100 flex items-center justify-end w-full md:w-auto">
+              {/* Action buttons (Cobrado & Delete) */}
+              <div className="self-end md:self-center border-t md:border-t-0 pt-3 md:pt-0 border-zinc-100 flex items-center gap-2 justify-end w-full md:w-auto">
+                {loan.status !== 'paid' && (
+                  <button
+                    onClick={() => handleMarkAsPaid(loan.id)}
+                    className="px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 rounded-xl transition-all flex items-center gap-1.5 text-[11.5px] font-black shadow-sm active:scale-95"
+                    title="Marcar préstamo como Pago completo / Cobrado"
+                  >
+                    <Check className="w-4 h-4 text-emerald-700 font-extrabold" />
+                    <span>Marcar Cobrado</span>
+                  </button>
+                )}
                 <button
                   onClick={() => handleDeleteLoan(loan.id)}
                   className="p-2 text-zinc-400 hover:text-red-800 hover:bg-red-50 rounded-full transition-all flex items-center gap-1 text-[11px] font-bold border border-transparent hover:border-red-100"
@@ -558,6 +746,94 @@ export default function Loans() {
           ))
         )}
       </div>
+
+      {/* Confirmation Modal: Mark Paid */}
+      {showConfirmModal && loanToMarkPaid && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-fade-in backdrop-blur-xs">
+          <div className="bg-white p-6 rounded-3xl border border-zinc-150 max-w-sm w-full space-y-4 shadow-xl text-zinc-900">
+            <div className="flex items-center gap-3 text-emerald-800">
+              <div className="p-2.5 bg-emerald-50 rounded-full">
+                <Check className="w-5 h-5 text-emerald-700 font-black" />
+              </div>
+              <h4 className="font-black text-sm uppercase tracking-wider text-emerald-950">¿Confirmar Pago?</h4>
+            </div>
+            <p className="text-xs text-zinc-650 leading-normal font-medium">
+              ¿Confirmar que este préstamo ha sido pagado / cobrado por completo? El balance pendiente se reducirá a **RD$ 0** y la garantía quedará liberada.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setShowConfirmModal(false);
+                  setLoanToMarkPaid(null);
+                }}
+                className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-bold rounded-xl transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  if (!user) return;
+                  try {
+                    await updateLoanInFirestore(user.uid, loanToMarkPaid, { status: 'paid' });
+                  } catch (err) {
+                    console.error('Error al actualizar el préstamo a cobrado:', err);
+                  } finally {
+                    setShowConfirmModal(false);
+                    setLoanToMarkPaid(null);
+                  }
+                }}
+                className="px-5 py-2 bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-black rounded-xl shadow-md transition-all active:scale-95"
+              >
+                Sí, Cobrado
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal: Delete Loan */}
+      {showDeleteModal && loanToDeleteId && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 animate-fade-in backdrop-blur-xs">
+          <div className="bg-white p-6 rounded-3xl border border-zinc-150 max-w-sm w-full space-y-4 shadow-xl text-zinc-900">
+            <div className="flex items-center gap-3 text-red-800">
+              <div className="p-2.5 bg-red-50 rounded-full">
+                <Trash2 className="w-5 h-5 text-red-700" />
+              </div>
+              <h4 className="font-black text-sm uppercase tracking-wider text-red-950">¿Eliminar Registro?</h4>
+            </div>
+            <p className="text-xs text-zinc-650 leading-normal font-medium">
+              ¿Está seguro de eliminar o dar por finalizado este contrato de préstamo? Esta acción es irreversible.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setLoanToDeleteId(null);
+                }}
+                className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 text-xs font-bold rounded-xl transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  if (!user) return;
+                  try {
+                    await deleteLoanInFirestore(user.uid, loanToDeleteId);
+                  } catch (err) {
+                    console.error('Error al eliminar préstamo:', err);
+                  } finally {
+                    setShowDeleteModal(false);
+                    setLoanToDeleteId(null);
+                  }
+                }}
+                className="px-5 py-2 bg-red-800 hover:bg-red-900 text-white text-xs font-black rounded-xl shadow-md transition-all active:scale-95"
+              >
+                Sí, Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

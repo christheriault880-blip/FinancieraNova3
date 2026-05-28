@@ -83,16 +83,52 @@ export async function analyzeExpenses(transactions: Transaction[]): Promise<AIIn
       id: `ai-${Date.now()}-${index}`
     }));
   } catch (error: any) {
-    console.error("Error analyzing expenses with Gemini:", error);
-    const errorStr = typeof error === 'object' ? JSON.stringify(error) : String(error);
+    const errMsg = error?.message || '';
+    const errStatus = error?.status || '';
+    const errorStr = `${errMsg} ${errStatus} ${error?.stack || ''} ${String(error)}`;
     
-    if (errorStr.includes("leaked") || errorStr.includes("403") || errorStr.includes("PERMISSION_DENIED")) {
+    if (
+      errorStr.includes("429") || 
+      errorStr.toUpperCase().includes("RESOURCE_EXHAUSTED") || 
+      errorStr.toLowerCase().includes("quota") || 
+      errorStr.toLowerCase().includes("exceeded") ||
+      errorStr.toLowerCase().includes("leaked") ||
+      errorStr.toLowerCase().includes("leak")
+    ) {
+      console.warn("Información de la API de Gemini (cuota o clave segura):", errorStr);
+    } else {
+      console.error("Error inesperado al conectar con Gemini:", error);
+    }
+    
+    if (
+      errorStr.toLowerCase().includes("leaked") || 
+      errorStr.toLowerCase().includes("leak") || 
+      errorStr.includes("403") || 
+      errorStr.includes("PERMISSION_DENIED")
+    ) {
       return [
         {
           id: `ai-err-leaked-${Date.now()}`,
           type: "warning",
           message: "⚠️ Tu clave de API de Gemini ha sido reportada como filtrada (leaked) y bloqueada por Google. Por seguridad, ingresa una nueva clave de API válida en las Configuraciones (icono de engranaje).",
           impact: "Acción requerida: Configurar API Key"
+        }
+      ];
+    }
+
+    if (
+      errorStr.includes("429") || 
+      errorStr.toUpperCase().includes("RESOURCE_EXHAUSTED") || 
+      errorStr.toLowerCase().includes("quota") || 
+      errorStr.toLowerCase().includes("exceeded") ||
+      errorStr.toLowerCase().includes("limite")
+    ) {
+      return [
+        {
+          id: `ai-err-quota-${Date.now()}`,
+          type: "warning",
+          message: "🛡️ Se ha superado el límite de consultas (Quota Exceeded) de la versión gratuita de Gemini API. Por favor, espere un momento antes de volver a solicitar un análisis financiero, o configure una clave de API propia en el panel de Ajustes.",
+          impact: "Límite de Consultas (429)"
         }
       ];
     }
@@ -139,10 +175,27 @@ export async function chatWithAI(messages: { role: 'user' | 'assistant', content
     return response.text || "No pude generar una respuesta.";
   } catch (error: any) {
     console.error("Error in AI chat:", error);
-    const errorStr = typeof error === 'object' ? JSON.stringify(error) : String(error);
+    const errMsg = error?.message || '';
+    const errStatus = error?.status || '';
+    const errorStr = `${errMsg} ${errStatus} ${error?.stack || ''} ${String(error)}`;
     
-    if (errorStr.includes("leaked") || errorStr.includes("403") || errorStr.includes("PERMISSION_DENIED")) {
+    if (
+      errorStr.toLowerCase().includes("leaked") || 
+      errorStr.toLowerCase().includes("leak") || 
+      errorStr.includes("403") || 
+      errorStr.includes("PERMISSION_DENIED")
+    ) {
       return "⚠️ **Error de Seguridad (API Key reportada como filtrada)**\n\nTu clave de API de Gemini actual ha sido reportada como **filtrada o expuesta (leaked)** pública o accidentalmente en algún repositorio o foro. Por esta razón, los servidores de Google han inhabilitado y bloqueado esta clave por seguridad para que nadie pueda abusar de ella.\n\n**Para solucionarlo:**\n1. Ve al panel de **Configuraciones / Claves de API** (icono de engranaje en la sección de Recordatorios).\n2. Adquiere una nueva clave de API de Gemini de forma gratuita en tu Google AI Studio.\n3. Pégala allí y presiona **Guardar Clave de API**.\n\nUna vez hecho esto, tu Asistente Inteligente funcionará de nuevo sin inconvenientes.";
+    }
+
+    if (
+      errorStr.includes("429") || 
+      errorStr.toUpperCase().includes("RESOURCE_EXHAUSTED") || 
+      errorStr.toLowerCase().includes("quota") || 
+      errorStr.toLowerCase().includes("exceeded") ||
+      errorStr.toLowerCase().includes("limite")
+    ) {
+      return "🛡️ **Límite de Consultas Superado (Límite 429)**\n\nHas alcanzado el límite de consultas permitidas por minuto o por día en la versión gratuita de la API de **Gemini**. Esto es habitual cuando hay mucho tráfico o interacciones seguidas.\n\n**¿Cómo solucionarlo?**\n1. **Prueba de nuevo en unos 30-45 segundos** ya que las cuotas por minuto suelen expirar rápidamente.\n2. Si prefieres consultas ilimitadas y mayor velocidad, puedes obtener tu propia clave de API gratuita en Google AI Studio, ingresarla en el panel de **Configuraciones** (icono de engranaje) y guardarla.";
     }
     
     return `Hubo un error al procesar tu solicitud con el Asistente Inteligente. Detalle: ${error?.message || errorStr}`;

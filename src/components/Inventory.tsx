@@ -24,7 +24,8 @@ import {
   Tag,
   History,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Clock
 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 import { useAuth } from '../AuthContext';
@@ -36,9 +37,10 @@ import {
   addTransaction,
   subscribeToDailySummaries,
   addDailySummary,
-  deleteDailySummary
+  deleteDailySummary,
+  subscribeToLoans
 } from '../services/firestoreService';
-import { InventoryItem, DailySalesSummary } from '../types';
+import { InventoryItem, DailySalesSummary, Loan } from '../types';
 
 const categoryIcons: Record<string, any> = {
   'Inmuebles': Building,
@@ -66,6 +68,7 @@ export default function Inventory() {
   const { user } = useAuth();
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loans, setLoans] = useState<Loan[]>([]);
   const [filter, setFilter] = useState<string | 'All'>('All');
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -177,6 +180,15 @@ export default function Inventory() {
     return () => unsubscribe();
   }, [user]);
 
+  // Subscribe to loans list to calculate pending balance on linked assets with 2 or more units
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = subscribeToLoans(user.uid, (data) => {
+      setLoans(data || []);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
   // Subscribe to Daily Sales Summaries
   useEffect(() => {
     if (!user) return;
@@ -277,21 +289,21 @@ export default function Inventory() {
 
     setSaleProcessing(true);
     try {
-      // 1. Update stock levels in Firestore
-      await updateInventoryItem(user.uid, sellingItem.id, {
-        stock: updatedStock,
-        totalSold: updatedSold,
-        salesIncome: updatedIncome
-      });
-
-      // 2. Automatically log an Income Transaction in finance ledger
-      await addTransaction(user.uid, {
-        amount: incomeAmount,
-        category: 'Otros',
-        description: `Venta POS: ${qty}x ${sellingItem.name} @ ${formatCurrency(sellPrice)} c/u`,
-        date: new Date().toISOString(),
-        type: 'income'
-      });
+      // 1. Update stock levels and automatically log transaction in parallel
+      await Promise.all([
+        updateInventoryItem(user.uid, sellingItem.id, {
+          stock: updatedStock,
+          totalSold: updatedSold,
+          salesIncome: updatedIncome
+        }),
+        addTransaction(user.uid, {
+          amount: incomeAmount,
+          category: 'Otros',
+          description: `Venta POS: ${qty}x ${sellingItem.name} @ ${formatCurrency(sellPrice)} c/u`,
+          date: new Date().toISOString(),
+          type: 'income'
+        })
+      ]);
 
       setSuccessToast(`¡Venta realizada con éxito! Se vendieron ${qty} unidades de "${sellingItem.name}". Ingreso de ${formatCurrency(incomeAmount)} registrado en Finanzas.`);
       setSellingItem(null);
@@ -326,20 +338,20 @@ export default function Inventory() {
 
     setRestockProcessing(true);
     try {
-      // 1. Update stock levels in Firestore
-      await updateInventoryItem(user.uid, restockingItem.id, {
-        stock: updatedStock,
-        value: unitCost // updates cost of acquisition
-      });
-
-      // 2. Log an Expense Transaction in finance ledger (Inversion de Surtido)
-      await addTransaction(user.uid, {
-        amount: costForIntake,
-        category: 'Otros',
-        description: `Inversión Surtido: +${qty}x ${restockingItem.name} @ ${formatCurrency(unitCost)} c/u`,
-        date: new Date().toISOString(),
-        type: 'expense'
-      });
+      // 1. Update stock levels and log expense in parallel
+      await Promise.all([
+        updateInventoryItem(user.uid, restockingItem.id, {
+          stock: updatedStock,
+          value: unitCost // updates cost of acquisition
+        }),
+        addTransaction(user.uid, {
+          amount: costForIntake,
+          category: 'Otros',
+          description: `Inversión Surtido: +${qty}x ${restockingItem.name} @ ${formatCurrency(unitCost)} c/u`,
+          date: new Date().toISOString(),
+          type: 'expense'
+        })
+      ]);
 
       setSuccessToast(`¡Surtido completado! Se ingresaron +${qty} unidades de "${restockingItem.name}". Gasto de ${formatCurrency(costForIntake)} registrado en Finanzas.`);
       setRestockingItem(null);
@@ -463,9 +475,12 @@ export default function Inventory() {
   });
 
   // Calculate stats
-  const totalAssetsCost = filteredItems.reduce((acc, curr) => acc + (curr.value * (curr.stock || 1)), 0);
+  const totalAssetsCost = filteredItems.reduce((acc, curr) => acc + (curr.value * (curr.stock ?? 0)), 0);
   const totalSoldIncome = filteredItems.reduce((acc, curr) => acc + (curr.salesIncome || 0), 0);
   const lowStockItemsCount = filteredItems.filter(item => (item.stock !== undefined && item.stock <= 5)).length;
+  const pendingLoansBalance = loans
+    .filter(l => l.inventoryItemId && (l.inventoryItemQty ?? 1) >= 2 && l.status !== 'paid')
+    .reduce((sum, l) => sum + l.amount, 0);
 
   return (
     <div id="inventory-container" className="space-y-8 animate-fade-in">
@@ -525,7 +540,7 @@ export default function Inventory() {
       {inventorySubTab === 'inventory' ? (
         <>
           {/* Main Stats Panel */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 font-sans">
             {/* Total Cost Inventory Card */}
             <div className="glass-card p-6 bg-gradient-to-br from-zinc-900 to-zinc-800 text-white border-none shadow-xl relative overflow-hidden rounded-3xl">
               <div className="relative z-10 flex flex-col justify-between h-full">
@@ -541,6 +556,22 @@ export default function Inventory() {
                 </p>
               </div>
               <Boxes className="absolute -right-6 -bottom-6 w-36 h-36 text-white/5 pointer-events-none" />
+            </div>
+
+            {/* Balance Pendiente (Préstamos) Card */}
+            <div className="glass-card p-6 bg-white border border-zinc-150 flex flex-col justify-between rounded-3xl relative overflow-hidden shadow-sm">
+              <div className="relative z-10 flex flex-col justify-between h-full">
+                <div>
+                  <div className="p-2.5 bg-amber-50 text-amber-600 rounded-lg w-fit mb-4">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                  <p className="text-zinc-500 text-xs font-semibold uppercase tracking-wider">Balance Pendiente (Préstamos 2+ u.)</p>
+                  <h3 className="text-3xl font-black mt-1 tracking-tight text-amber-600">{formatCurrency(pendingLoansBalance)}</h3>
+                </div>
+                <p className="text-[10px] text-zinc-400 mt-4 leading-normal">
+                  Monto de unidades entregadas/cedidas a préstamos de 2 o más unidades todavía pendientes de cobro.
+                </p>
+              </div>
             </div>
 
             {/* Sales / profits summary */}
@@ -698,7 +729,7 @@ export default function Inventory() {
               {filteredItems.map((item) => {
                 const IconComponent = categoryIcons[item.category] || Package;
                 const colorClass = categoryColors[item.category] || 'bg-zinc-50 text-zinc-650 border-zinc-100';
-                const isOnLoan = item.notes?.includes('[EN PRÉSTAMO]');
+                const isOnLoan = false;
                 
                 // Stock indicators
                 const stock = item.stock ?? 0;

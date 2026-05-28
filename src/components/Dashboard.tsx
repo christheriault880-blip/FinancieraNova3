@@ -54,7 +54,7 @@ export default function Dashboard() {
     
   const totalBalance = totalIncome - totalExpenses;
   const totalSavings = goals.reduce((sum, g) => sum + g.currentAmount, 0);
-  const totalAssets = inventoryItems.reduce((sum, item) => sum + item.value, 0);
+  const totalAssets = inventoryItems.reduce((sum, item) => sum + (item.value * (item.stock ?? 0)), 0);
   const netPatrimony = totalBalance + totalSavings + totalAssets;
 
   // Get weekly activity (last 7 days)

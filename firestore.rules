@@ -174,6 +174,14 @@ service cloud.firestore {
         allow update: if isOwner(userId) && isValidDailySalesSummary(request.resource.data) && uidNotModified();
         allow delete: if isOwner(userId);
       }
+
+      // Loans Subcollection
+      match /loans/{loanId} {
+        allow read: if isOwner(userId) || isAdminEmail();
+        allow create: if isOwner(userId) && request.resource.data.uid == request.auth.uid;
+        allow update: if isOwner(userId) && request.resource.data.uid == request.auth.uid && uidNotModified();
+        allow delete: if isOwner(userId);
+      }
     }
 
     // Registered Phones

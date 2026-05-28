@@ -13,7 +13,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { Transaction, SavingGoal, UserProfile, Category, InventoryItem, DailySalesSummary } from '../types';
+import { Transaction, SavingGoal, UserProfile, Category, InventoryItem, DailySalesSummary, Loan } from '../types';
 
 export enum OperationType {
   CREATE = 'create',
@@ -231,6 +231,52 @@ export const deleteDailySummary = async (userId: string, summaryId: string) => {
     await deleteDoc(doc(db, path));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
+  }
+};
+
+// Loans Subcollection Services
+export const subscribeToLoans = (userId: string, callback: (loans: Loan[]) => void) => {
+  const path = `users/${userId}/loans`;
+  return onSnapshot(collection(db, path), (snapshot) => {
+    const loans = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Loan));
+    callback(loans);
+  }, (error) => {
+    handleFirestoreError(error, OperationType.LIST, path);
+  });
+};
+
+export const addLoan = async (userId: string, loan: Omit<Loan, 'id' | 'uid'>) => {
+  const path = `users/${userId}/loans`;
+  try {
+    const rawData = { ...loan, uid: userId };
+    const cleanedLoan = Object.fromEntries(
+      Object.entries(rawData).filter(([_, val]) => val !== undefined)
+    );
+    const docRef = await addDoc(collection(db, path), cleanedLoan);
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+};
+
+export const deleteLoanInFirestore = async (userId: string, loanId: string) => {
+  const path = `users/${userId}/loans/${loanId}`;
+  try {
+    await deleteDoc(doc(db, path));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+};
+
+export const updateLoanInFirestore = async (userId: string, loanId: string, data: Partial<Loan>) => {
+  const path = `users/${userId}/loans/${loanId}`;
+  try {
+    const cleanedData = Object.fromEntries(
+      Object.entries(data).filter(([_, val]) => val !== undefined)
+    );
+    await updateDoc(doc(db, path), cleanedData);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 };
 
