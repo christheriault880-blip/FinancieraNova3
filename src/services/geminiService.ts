@@ -12,14 +12,28 @@ export function setGeminiApiKey(key: string) {
 
 function getGeminiClient() {
   const keyToUse = activeApiKey || localStorage.getItem('nova_gemini_api_key') || process.env.GEMINI_API_KEY || '';
-  return new GoogleGenAI({ apiKey: keyToUse });
+  return new GoogleGenAI({ 
+    apiKey: keyToUse,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build'
+      }
+    }
+  });
 }
 
 export async function analyzeExpenses(transactions: Transaction[]): Promise<AIInsight[]> {
   const keyToUse = activeApiKey || localStorage.getItem('nova_gemini_api_key') || process.env.GEMINI_API_KEY || '';
   if (!keyToUse) {
-    console.warn("GEMINI_API_KEY not configured. Using mock insights.");
-    return [];
+    console.warn("GEMINI_API_KEY not configured. Using placeholder insights.");
+    return [
+      {
+        id: "ai-err-no-key",
+        type: "warning",
+        message: "No se ha configurado la clave de API de Gemini. Por favor, añada su clave de API de Gemini en el panel de Configuraciones para activar el Asistente Inteligente.",
+        impact: "Clave Requerida"
+      }
+    ];
   }
 
   const prompt = `
@@ -68,9 +82,29 @@ export async function analyzeExpenses(transactions: Transaction[]): Promise<AIIn
       ...item,
       id: `ai-${Date.now()}-${index}`
     }));
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error analyzing expenses with Gemini:", error);
-    return [];
+    const errorStr = typeof error === 'object' ? JSON.stringify(error) : String(error);
+    
+    if (errorStr.includes("leaked") || errorStr.includes("403") || errorStr.includes("PERMISSION_DENIED")) {
+      return [
+        {
+          id: `ai-err-leaked-${Date.now()}`,
+          type: "warning",
+          message: "⚠️ Tu clave de API de Gemini ha sido reportada como filtrada (leaked) y bloqueada por Google. Por seguridad, ingresa una nueva clave de API válida en las Configuraciones (icono de engranaje).",
+          impact: "Acción requerida: Configurar API Key"
+        }
+      ];
+    }
+    
+    return [
+      {
+        id: `ai-err-general-${Date.now()}`,
+        type: "warning",
+        message: `No se pudo conectar con el Asistente de IA: ${error?.message || "Servicio no disponible temporalmente."}`,
+        impact: "Error de conexión"
+      }
+    ];
   }
 }
 
@@ -103,8 +137,14 @@ export async function chatWithAI(messages: { role: 'user' | 'assistant', content
     });
 
     return response.text || "No pude generar una respuesta.";
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error in AI chat:", error);
-    return "Hubo un error al procesar tu solicitud con el Asistente Inteligente. Por favor, asegúrate de haber configurado tu propia clave Gemini API de forma correcta en el panel de configuración (icono de engranaje).";
+    const errorStr = typeof error === 'object' ? JSON.stringify(error) : String(error);
+    
+    if (errorStr.includes("leaked") || errorStr.includes("403") || errorStr.includes("PERMISSION_DENIED")) {
+      return "⚠️ **Error de Seguridad (API Key reportada como filtrada)**\n\nTu clave de API de Gemini actual ha sido reportada como **filtrada o expuesta (leaked)** pública o accidentalmente en algún repositorio o foro. Por esta razón, los servidores de Google han inhabilitado y bloqueado esta clave por seguridad para que nadie pueda abusar de ella.\n\n**Para solucionarlo:**\n1. Ve al panel de **Configuraciones / Claves de API** (icono de engranaje en la sección de Recordatorios).\n2. Adquiere una nueva clave de API de Gemini de forma gratuita en tu Google AI Studio.\n3. Pégala allí y presiona **Guardar Clave de API**.\n\nUna vez hecho esto, tu Asistente Inteligente funcionará de nuevo sin inconvenientes.";
+    }
+    
+    return `Hubo un error al procesar tu solicitud con el Asistente Inteligente. Detalle: ${error?.message || errorStr}`;
   }
 }

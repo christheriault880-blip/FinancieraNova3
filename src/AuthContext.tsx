@@ -2,7 +2,13 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, onAuthStateChanged } from 'firebase/auth';
 import { auth } from './firebase';
 import { UserProfile, Transaction, SavingGoal } from './types';
-import { subscribeToUserProfile, createUserProfile, subscribeToTransactions, subscribeToGoals } from './services/firestoreService';
+import { 
+  subscribeToUserProfile, 
+  createUserProfile, 
+  subscribeToTransactions, 
+  subscribeToGoals, 
+  updateUserProfileByAdmin 
+} from './services/firestoreService';
 
 interface AuthContextType {
   user: User | null;
@@ -11,6 +17,10 @@ interface AuthContextType {
   transactions: Transaction[];
   goals: SavingGoal[];
   isAdmin: boolean;
+  isSaaSAccessGranted: boolean;
+  isPhoneMissing: boolean;
+  isSubExpired: boolean;
+  isSubSuspended: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -23,6 +33,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [goals, setGoals] = useState<SavingGoal[]>([]);
 
   const isAdmin = user?.email === 'christheriault880@gmail.com';
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const isExpired = profile?.subscriptionEnd ? (profile.subscriptionEnd < todayStr) : false;
+  const isSuspended = profile?.subscriptionStatus === 'suspendida';
+
+  const isSaaSAccessGranted = isAdmin || (
+    profile ? (
+      !!profile.phone && 
+      profile.subscriptionStatus === 'activa' && 
+      !isExpired && 
+      !isSuspended
+    ) : false
+  );
+
+  const isPhoneMissing = !isAdmin && profile !== null && !profile.phone;
+  const isSubExpired = !isAdmin && profile !== null && !!profile.phone && (isExpired || profile.subscriptionStatus === 'vencida');
+  const isSubSuspended = !isAdmin && profile !== null && !!profile.phone && (isSuspended || profile.subscriptionStatus === 'suspendida');
 
   useEffect(() => {
     let unsubscribeProfile: (() => void) | null = null;
@@ -65,6 +92,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               await createUserProfile(newProfile);
             } else {
               setProfile(p);
+              // Auto-expire check: update status to 'vencida' in database if expired
+              if (p.subscriptionStatus === 'activa' && p.subscriptionEnd && p.subscriptionEnd < todayStr) {
+                updateUserProfileByAdmin(p.uid, { subscriptionStatus: 'vencida' }).catch(console.error);
+              }
             }
           } catch (subscriptionErr) {
             console.error("Error setting up or creating user profile snapshot:", subscriptionErr);
@@ -106,7 +137,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, transactions, goals, isAdmin }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      profile, 
+      loading, 
+      transactions, 
+      goals, 
+      isAdmin,
+      isSaaSAccessGranted,
+      isPhoneMissing,
+      isSubExpired,
+      isSubSuspended
+    }}>
       {children}
     </AuthContext.Provider>
   );

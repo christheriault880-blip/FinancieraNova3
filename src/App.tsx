@@ -49,6 +49,7 @@ import Agenda from './components/Agenda';
 import NotificationsPopover from './components/NotificationsPopover';
 import Loans from './components/Loans';
 import PaymentReminders from './components/PaymentReminders';
+import { PhoneRegistrationView, SubscriptionExpiredView, SubscriptionSuspendedView } from './components/SaaSViews';
 import { BellRing } from 'lucide-react';
 
 type Tab = 'dashboard' | 'transactions' | 'savings' | 'ai' | 'profile' | 'admin' | 'inventory' | 'billing' | 'pos_billing' | 'agenda' | 'loans' | 'reminders';
@@ -118,7 +119,7 @@ const Logo = ({ className }: { className?: string }) => (
 );
 
 export default function App() {
-  const { user, loading, isAdmin } = useAuth();
+  const { user, loading, isAdmin, isPhoneMissing, isSubExpired, isSubSuspended } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newTx, setNewTx] = useState({
@@ -485,6 +486,19 @@ export default function App() {
         </div>
       </div>
     );
+  }
+
+  // INTERCEPT TO COMPLY WITH SaaS REQUIREMENT SCREEN OVERLAYS
+  if (isPhoneMissing) {
+    return <PhoneRegistrationView />;
+  }
+
+  if (isSubExpired) {
+    return <SubscriptionExpiredView />;
+  }
+
+  if (isSubSuspended) {
+    return <SubscriptionSuspendedView />;
   }
 
   return (

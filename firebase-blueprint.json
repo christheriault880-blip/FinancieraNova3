@@ -10,7 +10,12 @@
         "email": { "type": "string", "description": "Correo electrónico del usuario." },
         "monthlyBudget": { "type": "number", "description": "Presupuesto mensual establecido." },
         "autoSaveEnabled": { "type": "boolean", "description": "Si el ahorro automático está activado." },
-        "roundUpEnabled": { "type": "boolean", "description": "Si el redondeo de compras está activado." }
+        "roundUpEnabled": { "type": "boolean", "description": "Si el redondeo de compras está activado." },
+        "phone": { "type": "string", "description": "Número de teléfono registrado obligatoriamente." },
+        "subscriptionStart": { "type": "string", "description": "Fecha de inicio de la suscripción." },
+        "subscriptionEnd": { "type": "string", "description": "Fecha de vencimiento de la suscripción." },
+        "subscriptionStatus": { "type": "string", "enum": ["activa", "vencida", "suspendida"], "description": "Estado de la suscripción SaaS." },
+        "role": { "type": "string", "enum": ["admin", "user"], "description": "Rol del usuario en el sistema." }
       },
       "required": ["uid", "email", "monthlyBudget"]
     },
@@ -75,6 +80,16 @@
         "productsSold": { "type": "array" }
       },
       "required": ["uid", "date", "createdAt", "totalUnitsSold", "totalIncome", "totalProfit", "productsSold"]
+    },
+    "RegisteredPhone": {
+      "title": "RegisteredPhone",
+      "description": "Log de números de teléfono registrados para prevención de fraude y limitar una cuenta por teléfono.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "ID del usuario propietario del número de teléfono." },
+        "email": { "type": "string", "description": "Email registrado." }
+      },
+      "required": ["uid"]
     }
   },
   "firestore": {
@@ -97,6 +112,10 @@
     "/users/{userId}/daily_summaries/{summaryId}": {
       "schema": "DailySalesSummary",
       "description": "Lista de cierres diarios e historial de ventas guardadas."
+    },
+    "/registered_phones/{phone}": {
+      "schema": "RegisteredPhone",
+      "description": "Colección global de teléfonos registrados para prevenir múltiples cuentas."
     }
   }
 }

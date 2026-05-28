@@ -40,6 +40,11 @@ export interface UserProfile {
   monthlyBudget: number;
   autoSaveEnabled: boolean;
   roundUpEnabled: boolean;
+  phone?: string;
+  subscriptionStart?: string;
+  subscriptionEnd?: string;
+  subscriptionStatus?: 'activa' | 'vencida' | 'suspendida';
+  role?: 'admin' | 'user';
 }
 
 export type InventoryCategory = string;

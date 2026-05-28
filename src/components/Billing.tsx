@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import { safeHtml2canvas } from '../lib/pdfHelper';
+import { jsPDF } from 'jspdf';
 import { 
   ReceiptText, 
   Printer, 
@@ -15,7 +17,8 @@ import {
   Search,
   FolderOpen,
   Boxes,
-  AlertCircle
+  AlertCircle,
+  Upload
 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 import { useAuth } from '../AuthContext';
@@ -52,6 +55,7 @@ interface SavedInvoice {
   issuerAddress: string;
   issuerPhone: string;
   issuerEmail: string;
+  issuerLogo?: string;
   subtotal: number;
   taxAmount: number;
   grandTotal: number;
@@ -108,11 +112,51 @@ export default function Billing() {
   const { user, profile } = useAuth();
   
   // Custom Issuer/Company Details Configuration
-  const [issuerName, setIssuerName] = useState('Financiera Nova');
-  const [issuerRnc, setIssuerRnc] = useState('1-01-88432-1');
-  const [issuerAddress, setIssuerAddress] = useState('Av. Winston Churchill, Plaza Central, Santo Domingo');
-  const [issuerPhone, setIssuerPhone] = useState('(809) 555-0199');
-  const [issuerEmail, setIssuerEmail] = useState('soporte@financieranova.com.do');
+  const [issuerName, setIssuerName] = useState(() => localStorage.getItem('nova_billing_issuer_name') || 'Financiera Nova');
+  const [issuerRnc, setIssuerRnc] = useState(() => localStorage.getItem('nova_billing_issuer_rnc') || '1-01-88432-1');
+  const [issuerAddress, setIssuerAddress] = useState(() => localStorage.getItem('nova_billing_issuer_address') || 'Av. Winston Churchill, Plaza Central, Santo Domingo');
+  const [issuerPhone, setIssuerPhone] = useState(() => localStorage.getItem('nova_billing_issuer_phone') || '(809) 555-0199');
+  const [issuerEmail, setIssuerEmail] = useState(() => localStorage.getItem('nova_billing_issuer_email') || 'soporte@financieranova.com.do');
+  const [issuerLogo, setIssuerLogo] = useState(() => localStorage.getItem('nova_billing_issuer_logo') || '');
+
+  // Persist Billing Company settings in localStorage
+  useEffect(() => {
+    localStorage.setItem('nova_billing_issuer_name', issuerName);
+  }, [issuerName]);
+  useEffect(() => {
+    localStorage.setItem('nova_billing_issuer_rnc', issuerRnc);
+  }, [issuerRnc]);
+  useEffect(() => {
+    localStorage.setItem('nova_billing_issuer_address', issuerAddress);
+  }, [issuerAddress]);
+  useEffect(() => {
+    localStorage.setItem('nova_billing_issuer_phone', issuerPhone);
+  }, [issuerPhone]);
+  useEffect(() => {
+    localStorage.setItem('nova_billing_issuer_email', issuerEmail);
+  }, [issuerEmail]);
+  useEffect(() => {
+    localStorage.setItem('nova_billing_issuer_logo', issuerLogo);
+  }, [issuerLogo]);
+
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert("La imagen es muy grande. Por favor elige una menor a 2MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setIssuerLogo(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemoveLogo = () => {
+    setIssuerLogo('');
+  };
 
   // Invoice General Details
   const [clientName, setClientName] = useState('');
@@ -153,81 +197,261 @@ export default function Billing() {
   });
   const [savedSearchTerm, setSavedSearchTerm] = useState('');
 
-  // WhatsApp Share Image Modal state variables
+  // WhatsApp Share PDF Modal state variables
   const [whatsAppModalInvoice, setWhatsAppModalInvoice] = useState<SavedInvoice | null>(null);
   const [isCapturingHistory, setIsCapturingHistory] = useState(false);
   const [historyShareMessage, setHistoryShareMessage] = useState<string | null>(null);
 
-  const handleShareHistoryInvoiceImage = async (inv: SavedInvoice) => {
+  const handlePrintBotoneraTicket = (inv: SavedInvoice) => {
+    try {
+      const pWin = window.open('', '_blank');
+      if (pWin) {
+        pWin.document.write(`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>Ticket ${inv.invoiceNumber}</title>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
+              <script src="https://cdn.tailwindcss.com"></script>
+              <style>
+                body {
+                  font-family: 'JetBrains Mono', monospace;
+                  -webkit-print-color-adjust: exact;
+                  print-color-adjust: exact;
+                  background-color: #ffffff;
+                  margin: 0;
+                  padding: 0;
+                  width: 58mm;
+                }
+                @page {
+                  size: 58mm auto;
+                  margin: 0;
+                }
+                @media print {
+                  body {
+                    width: 58mm;
+                    margin: 0;
+                    padding: 2mm 1mm;
+                  }
+                  .no-print {
+                    display: none !important;
+                  }
+                }
+              </style>
+            </head>
+            <body class="text-zinc-900 text-[9.5px] p-[2mm]">
+              <div class="w-full">
+                <!-- Header -->
+                <div class="text-center border-b border-dashed border-zinc-300 pb-2 mb-2 flex flex-col items-center">
+                  ${(inv.issuerLogo || issuerLogo) ? `
+                    <img 
+                      src="${inv.issuerLogo || issuerLogo}" 
+                      alt="Logo" 
+                      style="width: 38px; height: 38px; border-radius: 50%; object-fit: cover; margin-bottom: 4px;" 
+                    />
+                  ` : ''}
+                  <h2 class="font-extrabold text-[11px] tracking-tight uppercase leading-tight">${inv.issuerName || 'Financiera Nova'}</h2>
+                  <p class="text-[8px] text-zinc-500 leading-normal mt-0.5">${inv.issuerAddress || 'Santo Domingo, RD'}</p>
+                  <p class="text-[8px] text-zinc-400 leading-normal">RNC: ${inv.issuerRnc || '1-01-88432-1'}</p>
+                  <p class="text-[8px] text-zinc-400 leading-normal">TEL: ${inv.issuerPhone || '(809) 555-0199'}</p>
+                  
+                  <div class="mt-1.5 py-0.5 px-2 bg-zinc-100 rounded text-[9px] font-black inline-block text-zinc-800 border border-zinc-200">
+                    TIQUE: ${inv.invoiceNumber}
+                  </div>
+                </div>
+
+                <!-- Info Invoice -->
+                <div class="space-y-0.5 text-[8px] border-b border-dashed border-zinc-200 pb-2 mb-2 leading-none">
+                  <p><span class="font-bold">Cliente:</span> ${inv.clientName}</p>
+                  ${inv.clientRnc ? `<p><span class="font-bold">RNC/Céd:</span> ${inv.clientRnc}</p>` : ''}
+                  <p><span class="font-bold">Fecha:</span> ${inv.issueDate ? new Date(inv.issueDate).toLocaleDateString() : new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                </div>
+
+                <!-- Items Table -->
+                <table class="w-full text-[8px] mb-2 leading-tight">
+                  <thead>
+                    <tr class="border-b border-zinc-300 text-left">
+                      <th class="pb-1 font-bold">DESCRIPCIÓN</th>
+                      <th class="text-center pb-1 w-[10mm]">CANT.</th>
+                      <th class="text-right pb-1 w-[16mm]">TOTAL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${inv.items.map((item: any) => `
+                      <tr class="border-b border-zinc-100 last:border-none">
+                        <td class="py-1 break-words max-w-[24mm]">${item.description}</td>
+                        <td class="py-1 text-center font-medium">${item.quantity}</td>
+                        <td class="py-1 text-right font-bold">${inv.currency || 'RD$'} ${(item.quantity * item.price).toLocaleString()}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+
+                <!-- Totals -->
+                <div class="border-t border-dashed border-zinc-300 pt-2 space-y-1 text-[8px] leading-none">
+                  <div class="flex justify-between">
+                    <span>Subtotal:</span>
+                    <span>${inv.currency || 'RD$'} ${inv.subtotal.toLocaleString()}</span>
+                  </div>
+                  ${inv.taxAmount > 0 ? `
+                    <div class="flex justify-between">
+                      <span>ITBIS (${inv.taxRate}%):</span>
+                      <span>${inv.currency || 'RD$'} ${inv.taxAmount.toLocaleString()}</span>
+                    </div>
+                  ` : ''}
+                  ${inv.discount > 0 ? `
+                    <div class="flex justify-between text-zinc-550">
+                      <span>Descuento:</span>
+                      <span>-${inv.currency || 'RD$'} ${inv.discount.toLocaleString()}</span>
+                    </div>
+                  ` : ''}
+                  <div class="flex justify-between font-black text-[9.5px] pt-1.5 border-t border-zinc-200 text-zinc-900">
+                    <span>TOTAL:</span>
+                    <span>${inv.currency || 'RD$'} ${inv.grandTotal.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <!-- Footer barcode lookalike or friendly note -->
+                <div class="text-center mt-3 pt-2 border-t border-dashed border-zinc-300">
+                  <p class="text-[7px] text-zinc-400 font-bold uppercase tracking-wider">¡Gracias por preferirnos!</p>
+                  <p class="text-[6.5px] text-zinc-400 mt-0.5">Visite: ${inv.issuerEmail || 'soporte@system.com'}</p>
+                </div>
+              </div>
+
+              <!-- Print panel helper for non-automatic environments -->
+              <div class="mt-4 flex flex-col gap-1.5 no-print p-2 bg-zinc-50 border border-zinc-200 rounded-xl text-center">
+                <span class="text-[7.5px] text-zinc-500">¿No se abrió la ventana de impresión?</span>
+                <div class="flex gap-1 justify-center">
+                  <button onclick="window.print()" class="px-2 py-1 bg-zinc-900 text-white rounded text-[8px] font-bold">Imprimir</button>
+                  <button onclick="window.close()" class="px-2 py-1 bg-zinc-250 text-zinc-700 rounded text-[8px] font-bold">Cerrar</button>
+                </div>
+              </div>
+
+              <script>
+                window.onload = function() {
+                  setTimeout(function() {
+                    window.print();
+                  }, 400);
+                };
+              </script>
+            </body>
+          </html>
+        `);
+        pWin.document.close();
+      } else {
+        window.print();
+      }
+    } catch (error) {
+      console.warn("Popup blocked, fallback printed:", error);
+      window.print();
+    }
+  };
+
+  const handlePrintCurrentBotoneraTicket = () => {
+    if (!clientName) {
+      alert('Por favor ingrese el nombre del cliente antes de progresar e imprimir.');
+      return;
+    }
+    const currentInvoiceData: SavedInvoice = {
+      id: 'temp',
+      invoiceNumber,
+      clientName,
+      clientRnc,
+      clientEmail: '',
+      issueDate: new Date().toISOString(),
+      dueDate: new Date().toISOString(),
+      currency,
+      status: 'paid',
+      items: items.map(it => ({
+        id: it.id,
+        description: it.description,
+        quantity: it.quantity,
+        price: it.price
+      })),
+      taxRate,
+      discount,
+      issuerName,
+      issuerRnc,
+      issuerAddress,
+      issuerPhone,
+      issuerEmail,
+      issuerLogo,
+      subtotal,
+      taxAmount,
+      grandTotal
+    };
+    handlePrintBotoneraTicket(currentInvoiceData);
+  };
+
+  const handleOpenPdfInvoice = async (inv: SavedInvoice, method: 'open' | 'share') => {
     const element = document.getElementById('history-invoice-capture-card');
     if (!element) return;
-
-    // Mensaje descriptivo para WhatsApp
-    const textMsg = `*Recibo digital:* Hola, adjunto el recibo de compra No. ${inv.invoiceNumber} por valor de ${inv.currency || 'RD$'} ${inv.grandTotal.toLocaleString()}. *(Por favor, haz Pegar (Ctrl+V) aquí para enviar la foto del tique)*`;
-    const shareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(textMsg)}`;
-    
-    // Se abre inmediatamente de forma síncrona en el hilo del clic para evitar que el navegador lo bloquee como un popup
-    const whatsAppWindow = window.open(shareUrl, '_blank');
 
     setIsCapturingHistory(true);
     setHistoryShareMessage(null);
     try {
-      const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(element, {
+      const canvas = await safeHtml2canvas(element, {
         backgroundColor: '#ffffff',
-        scale: 2, // High resolution capture
+        scale: 3, // Capture en ultra alta definición
         useCORS: true,
         logging: false
       });
 
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          throw new Error("No se pudo generar el archivo de imagen.");
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const pdfWidth = 140; // Mayor anchura para formato más grande y nítido
+      const pdfHeight = (imgHeight * pdfWidth) / imgWidth;
+
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: [pdfWidth, pdfHeight]
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+
+      const pdfBlob = pdf.output('blob');
+      const blobUrl = URL.createObjectURL(pdfBlob);
+
+      if (method === 'open') {
+        const pdfWindow = window.open(blobUrl, '_blank');
+        if (!pdfWindow) {
+          setHistoryShareMessage("⚠️ Su navegador bloqueó la ventana emergente. Por favor, permita las ventanas emergentes o intente de nuevo.");
+        } else {
+          setHistoryShareMessage("¡Factura PDF abierta en una pestaña nueva sin descargar!");
         }
-
-        const file = new File([blob], `Recibo_${inv.invoiceNumber}.png`, { type: 'image/png' });
-
-        // Intenta usar de forma prioritaria la API nativa de compartir
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      } else {
+        const file = new File([pdfBlob], `Factura_${inv.invoiceNumber}.pdf`, { type: 'application/pdf' });
+        
+        // Intentar compartir de forma nativa
+        if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
           try {
             await navigator.share({
               files: [file],
-              title: `Recibo ${inv.invoiceNumber}`,
-              text: `Hola, adjunto el recibo de compra No. ${inv.invoiceNumber}.`
+              title: `Factura ${inv.invoiceNumber}`,
+              text: `Hola, le comparto la factura No. ${inv.invoiceNumber} en formato PDF.`
             });
-            setHistoryShareMessage("¡Recibo compartido exitosamente!");
+            setHistoryShareMessage("¡Factura PDF compartida exitosamente por WhatsApp/Compartir nativo!");
             return;
           } catch (shareErr) {
-            console.warn("El compartir nativo fue cancelado o no es soportado:", shareErr);
+            console.warn("Compartido nativo cancelado o no soportado:", shareErr);
           }
         }
 
-        // Descarga directa de la imagen
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `Recibo_${inv.invoiceNumber}.png`;
-        link.click();
+        // WhatsApp Web/Link Fallback
+        const textMsg = `*Factura Digital PDF:* Hola, le comparto la factura No. ${inv.invoiceNumber} por un total de ${inv.currency || 'RD$'} ${inv.grandTotal.toLocaleString()}. *(El archivo PDF está abierto en su visor de PDF, puede copiarlo o compartirlo desde allí)*`;
+        const shareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(textMsg)}`;
+        window.open(shareUrl, '_blank');
+        window.open(blobUrl, '_blank');
+        setHistoryShareMessage("Se abrió el visor PDF y la ventana de WhatsApp para adjuntar o copiar el documento.");
+      }
 
-        // Copia la imagen al portapapeles para facilitar el Pegar (Ctrl+V) en WhatsApp
-        try {
-          const item = new ClipboardItem({ "image/png": blob });
-          await navigator.clipboard.write([item]);
-          setHistoryShareMessage("¡Tíquet descargado y copiado al portapapeles! Ve a la pestaña de WhatsApp abierta y haz Pegar (Ctrl+V).");
-        } catch (clipErr) {
-          console.warn("Copiado al portapapeles bloqueado por el navegador:", clipErr);
-          setHistoryShareMessage("¡Tíquet descargado como imagen! Sube o adjunta la imagen descargada en WhatsApp.");
-        }
-
-        // Si la ventana de WhatsApp fue bloqueada de alguna forma, la reintentamos abrir aquí
-        if (!whatsAppWindow || whatsAppWindow.closed) {
-          window.open(shareUrl, '_blank');
-        }
-
-      }, 'image/png');
     } catch (err) {
-      console.error("Error al generar imagen de factura:", err);
-      alert("No se pudo procesar la imagen de la factura.");
+      console.error("Error al generar PDF de factura:", err);
+      alert("No se pudo procesar la factura en formato PDF.");
     } finally {
       setIsCapturingHistory(false);
     }
@@ -320,6 +544,7 @@ export default function Billing() {
       issuerAddress,
       issuerPhone,
       issuerEmail,
+      issuerLogo,
       subtotal,
       taxAmount,
       grandTotal
@@ -680,10 +905,22 @@ export default function Billing() {
             id="btn-print-main"
             onClick={handlePrint}
             className="flex items-center gap-1.5 px-4 py-2 bg-red-800 hover:bg-red-900 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md shadow-red-100 h-10 border border-red-750"
-            title="Imprimir Factura"
+            title="Imprimir Factura estándar"
           >
             <Printer className="w-4 h-4" />
             Imprimir Factura
+          </button>
+
+          <button 
+            id="btn-print-botonera-main"
+            onClick={handlePrintCurrentBotoneraTicket}
+            className="flex items-center gap-1.5 px-4 py-2 bg-zinc-900 hover:bg-zinc-850 text-white rounded-xl text-xs sm:text-sm font-semibold transition-all shadow-md h-10 border border-zinc-800"
+            title="Imprimir en Botonera (55mm - 58mm / tique térmico)"
+          >
+            <svg className="w-4 h-4 text-emerald-400 fill-none stroke-current stroke-2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+            </svg>
+            Imprimir en Botonera
           </button>
         </div>
       </div>
@@ -698,65 +935,100 @@ export default function Billing() {
               Tus Datos de Emisor (Empresa / Negocio)
             </h3>
             
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Nombre de Tu Empresa / Negocio *</label>
-                <div className="relative">
-                  <Building className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none" />
-                  <input 
-                    type="text" 
-                    required
-                    placeholder="Ej: Financiera Nova, SRL"
-                    className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none font-bold"
-                    value={issuerName}
-                    onChange={(e) => setIssuerName(e.target.value)}
-                  />
+            <div className="flex flex-col md:flex-row gap-5 items-start">
+              {/* Columna Logo Redondo */}
+              <div className="flex flex-col items-center gap-1.5 shrink-0 w-full md:w-auto text-center">
+                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider select-none">Logo Empresa</label>
+                <div className="relative w-24 h-24 rounded-full border-2 border-dashed border-zinc-300 hover:border-red-650 bg-zinc-50/50 flex flex-col items-center justify-center overflow-hidden transition-all group shadow-sm">
+                  {issuerLogo ? (
+                    <>
+                      <img src={issuerLogo} alt="Logo" className="w-full h-full object-cover animate-fade-in" />
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleRemoveLogo}
+                          className="p-1.5 bg-red-600 hover:bg-red-700 text-white rounded-full transition-all shadow-md"
+                          title="Eliminar Logo"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                        <label className="p-1.5 bg-zinc-650 hover:bg-zinc-750 text-white rounded-full transition-all shadow-md cursor-pointer" title="Cambiar Logo">
+                          <Upload className="w-3.5 h-3.5" />
+                          <input type="file" accept="image/*" onChange={handleLogoChange} className="hidden" />
+                        </label>
+                      </div>
+                    </>
+                  ) : (
+                    <label className="w-full h-full flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-100/50 transition-all p-2 text-center text-zinc-400 group">
+                      <Upload className="w-5 h-5 mb-1.5 text-zinc-400 group-hover:text-red-800 transition-colors" />
+                      <span className="text-[8px] font-extrabold uppercase leading-tight select-none">Elegir Foto</span>
+                      <input type="file" accept="image/*" onChange={handleLogoChange} className="hidden" />
+                    </label>
+                  )}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Columna Campos de Texto */}
+              <div className="flex-1 space-y-3 w-full">
                 <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Tu RNC / Cédula Comercial</label>
-                  <input 
-                    type="text" 
-                    placeholder="Ej: 1-01-88432-1"
-                    className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
-                    value={issuerRnc}
-                    onChange={(e) => setIssuerRnc(e.target.value)}
-                  />
+                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Nombre de Tu Empresa / Negocio *</label>
+                  <div className="relative">
+                    <Building className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none" />
+                    <input 
+                      type="text" 
+                      required
+                      placeholder="Ej: Financiera Nova, SRL"
+                      className="w-full pl-9 pr-4 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none font-bold"
+                      value={issuerName}
+                      onChange={(e) => setIssuerName(e.target.value)}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Tu Teléfono de Contacto</label>
-                  <input 
-                    type="text" 
-                    placeholder="Ej: (809) 555-0199"
-                    className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
-                    value={issuerPhone}
-                    onChange={(e) => setIssuerPhone(e.target.value)}
-                  />
-                </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Dirección de Operaciones</label>
-                  <input 
-                    type="text" 
-                    placeholder="Ej: Av. Winston Churchill, Santo Domingo"
-                    className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
-                    value={issuerAddress}
-                    onChange={(e) => setIssuerAddress(e.target.value)}
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Tu RNC / Cédula Comercial</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej: 1-01-88432-1"
+                      className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
+                      value={issuerRnc}
+                      onChange={(e) => setIssuerRnc(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Tu Teléfono de Contacto</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej: (809) 555-0199"
+                      className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
+                      value={issuerPhone}
+                      onChange={(e) => setIssuerPhone(e.target.value)}
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Email / Web</label>
-                  <input 
-                    type="text" 
-                    placeholder="Ej: contacto@tuempresa.com"
-                    className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
-                    value={issuerEmail}
-                    onChange={(e) => setIssuerEmail(e.target.value)}
-                  />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Dirección de Operaciones</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej: Av. Winston Churchill, Santo Domingo"
+                      className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
+                      value={issuerAddress}
+                      onChange={(e) => setIssuerAddress(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Email / Web</label>
+                    <input 
+                      type="text" 
+                      placeholder="Ej: contacto@tuempresa.com"
+                      className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-xl text-xs focus:ring-1 focus:ring-red-800 focus:bg-white outline-none"
+                      value={issuerEmail}
+                      onChange={(e) => setIssuerEmail(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -1119,10 +1391,18 @@ export default function Billing() {
             {/* Invoice Top header */}
             <div className="flex flex-col sm:flex-row justify-between items-start gap-4 border-b border-zinc-150 pb-6">
               <div className="space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-red-800 flex items-center justify-center text-white font-black text-sm uppercase">
-                    {issuerName ? issuerName.trim().split(' ').map(n => n[0]).join('').substring(0, 2) : 'N'}
-                  </div>
+                <div className="flex items-center gap-3">
+                  {issuerLogo ? (
+                    <img 
+                      src={issuerLogo} 
+                      alt="Logo" 
+                      className="w-12 h-12 rounded-full object-cover border border-zinc-200 shadow-xs shrink-0" 
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-red-800 flex items-center justify-center text-white font-black text-sm uppercase shrink-0">
+                      {issuerName ? issuerName.trim().split(' ').map(n => n[0]).join('').substring(0, 2) : 'N'}
+                    </div>
+                  )}
                   <h4 className="text-lg font-black text-zinc-900 tracking-tight uppercase select-all">
                     {issuerName || 'Financiera Nova'}
                   </h4>
@@ -1358,9 +1638,9 @@ export default function Billing() {
       {/* WhatsApp Invoice Image Modal for histories */}
       {whatsAppModalInvoice && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs select-none no-print">
-          <div className="bg-white rounded-3xl border border-zinc-200 max-w-sm w-full p-6 space-y-5 shadow-2xl relative text-center max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-zinc-200 max-w-md w-full p-6 space-y-5 shadow-2xl relative text-center max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-1">
-              <h4 className="text-xs font-black text-zinc-900 uppercase tracking-tight">Compartir por WhatsApp Gráfico</h4>
+              <h4 className="text-xs font-black text-zinc-900 uppercase tracking-tight">Ingresar a Factura PDF</h4>
               <button 
                 type="button" 
                 onClick={() => setWhatsAppModalInvoice(null)} 
@@ -1371,15 +1651,22 @@ export default function Billing() {
             </div>
 
             <p className="text-[10px] text-zinc-500 leading-normal">
-              A continuación tienes un diseño del tique de compra. Presiona el botón verde para <strong>guardar la imagen</strong> y <strong>copiarla al portapapeles</strong> automáticamente, luego abre WhatsApp para pegarla.
+              A continuación tienes una vista previa. Puedes **ingresar a la factura PDF** para verla en pantalla completa o compartirla en WhatsApp sin descargas previas.
             </p>
 
-            {/* Este es el contenedor que se convertirá en imagen con html2canvas */}
+            {/* Este es el contenedor que se convertirá en imagen con html2canvas y luego insertado en PDF */}
             <div 
               id="history-invoice-capture-card" 
-              className="bg-white border border-zinc-200 p-5 rounded-2xl text-left text-xs space-y-3 shadow-xs select-text text-zinc-900 mx-auto max-w-[320px] w-full block"
+              className="bg-white border border-zinc-200 p-6 rounded-2xl text-left text-xs space-y-3 shadow-xs select-text text-zinc-900 mx-auto max-w-[400px] w-full block"
             >
-              <div className="text-center border-b border-dashed border-zinc-200 pb-3 mb-3">
+              <div className="text-center border-b border-dashed border-zinc-200 pb-3 mb-3 flex flex-col items-center">
+                {(whatsAppModalInvoice.issuerLogo || issuerLogo) && (
+                  <img 
+                    src={whatsAppModalInvoice.issuerLogo || issuerLogo} 
+                    alt="Logo" 
+                    className="w-12 h-12 rounded-full object-cover mb-2 border border-zinc-150 shadow-xs shrink-0" 
+                  />
+                )}
                 <h5 className="font-extrabold text-[13px] tracking-tight uppercase text-zinc-900">
                   {whatsAppModalInvoice.issuerName || 'Financiera Nova'}
                 </h5>
@@ -1402,9 +1689,13 @@ export default function Billing() {
                   <span>Total</span>
                 </div>
                 {whatsAppModalInvoice.items.map((item, idx) => (
-                  <div key={idx} className="flex justify-between text-[11px]">
-                    <span className="font-semibold text-zinc-800 truncate max-w-[190px]">{item.quantity}x {item.description}</span>
-                    <span className="font-mono text-zinc-900 font-bold">{whatsAppModalInvoice.currency || 'RD$'} {(item.quantity * item.price).toLocaleString()}</span>
+                  <div key={idx} className="flex justify-between items-start text-[11px] py-1.5 border-b border-zinc-100 overflow-visible">
+                    <div className="font-semibold text-zinc-800 leading-relaxed pb-1.5 pr-2 break-all md:break-words whitespace-normal max-w-[240px] overflow-visible">
+                      {item.quantity}x {item.description}
+                    </div>
+                    <span className="font-mono text-zinc-900 font-bold shrink-0 pt-0.5">
+                      {whatsAppModalInvoice.currency || 'RD$'} {(item.quantity * item.price).toLocaleString()}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1437,35 +1728,58 @@ export default function Billing() {
             </div>
 
             {historyShareMessage && (
-              <div className="bg-emerald-50 text-emerald-800 text-[11px] font-bold p-3 rounded-xl border border-emerald-150 py-2">
+              <div className="bg-emerald-50 text-emerald-850 text-[11px] font-bold p-3 rounded-xl border border-emerald-150 py-2">
                 💬 {historyShareMessage}
               </div>
             )}
 
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2">
               <button
                 type="button"
                 disabled={isCapturingHistory}
-                onClick={() => handleShareHistoryInvoiceImage(whatsAppModalInvoice)}
-                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-300 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                onClick={() => handleOpenPdfInvoice(whatsAppModalInvoice, 'open')}
+                className="w-full py-2.5 bg-red-650 hover:bg-red-700 disabled:bg-zinc-350 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm"
               >
                 {isCapturingHistory ? (
-                  <span className="animate-pulse">Generando Imagen...</span>
+                  <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
                 ) : (
-                  <>
-                    <svg className="w-4 h-4 fill-current text-white" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M12.012 3c-4.965 0-9.01 4.05-9.01 9.01 0 1.583.411 3.125 1.196 4.49l-1.196 4.5 4.603-1.21A8.93 8.93 0 0 0 12.011 21c4.966 0 9.01-4.048 9.01-9.009S16.977 3 12.012 3zm4.992 12.871c-.206.581-1.014 1.135-1.564 1.205-.5.06-1.149.079-1.85-.152-.619-.203-1.5-.544-2.541-1.002-4.414-1.942-7.237-6.526-7.457-6.824-.22-.298-1.782-2.396-1.782-4.572s1.114-3.243 1.513-3.69c.399-.446.879-.558 1.171-.558.292 0 .584.004.839.015.267.012.623-.105.973.743.361.874 1.233 3.033 1.338 3.256.106.223.176.48.028.773-.148.296-.223.479-.444.739-.22.259-.464.577-.662.775-.22.22-.453.46-.195.903.257.442.1.848 1.201 1.838 1.417 1.266 2.613 1.657 2.978 1.838.365.181.579.152.793-.1s.924-1.082 1.174-1.455c.249-.373.499-.311.839-.185.341.127 2.162 1.026 2.536 1.212.373.187.623.277.712.433.09.155.09.897-.116 1.478z"/>
-                    </svg>
-                    Compartir en WhatsApp 💬
-                  </>
+                  <svg className="w-4 h-4 text-white fill-none stroke-current stroke-2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
                 )}
+                {isCapturingHistory ? "Generando Factura..." : "Ingresar a Factura en PDF 📄"}
               </button>
+
+              <button
+                type="button"
+                disabled={isCapturingHistory}
+                onClick={() => handleOpenPdfInvoice(whatsAppModalInvoice, 'share')}
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-350 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm text-center"
+              >
+                <svg className="w-4 h-4 text-white fill-none stroke-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 10.742l4.632-2.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316l-4.632-2.316m0 0a3 3 0 10-5.367-2.684 3 3 0 005.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                </svg>
+                Compartir por WhatsApp (Sin Descarga) 💬
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handlePrintBotoneraTicket(whatsAppModalInvoice)}
+                className="w-full py-2.5 bg-zinc-900 hover:bg-zinc-850 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm text-center"
+              >
+                <svg className="w-4 h-4 text-emerald-400 fill-none stroke-current stroke-2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                Imprimir en Botonera (55mm - 58mm) 🖨️
+              </button>
+
               <button
                 type="button"
                 onClick={() => setWhatsAppModalInvoice(null)}
-                className="py-2.5 px-4 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 rounded-xl text-xs font-black transition-all"
+                className="w-full py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-850 rounded-xl text-xs font-black transition-all"
               >
-                Cerrar
+                Cerrar Panel
               </button>
             </div>
           </div>

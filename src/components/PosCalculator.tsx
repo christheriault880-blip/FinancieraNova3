@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react';
+import { safeHtml2canvas } from '../lib/pdfHelper';
+import { jsPDF } from 'jspdf';
 import { 
   Boxes, 
   Search, 
@@ -12,7 +14,8 @@ import {
   Mail,
   MapPin,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Upload
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../AuthContext';
@@ -70,6 +73,26 @@ export default function PosCalculator() {
   const [issuerAddress, setIssuerAddress] = useState(() => localStorage.getItem('nova_pos_issuer_address') || 'Av. Winston Churchill, Plaza Central, Santo Domingo');
   const [issuerPhone, setIssuerPhone] = useState(() => localStorage.getItem('nova_pos_issuer_phone') || '(809) 555-0199');
   const [issuerEmail, setIssuerEmail] = useState(() => localStorage.getItem('nova_pos_issuer_email') || 'soporte@financieranova.com.do');
+  const [issuerLogo, setIssuerLogo] = useState(() => localStorage.getItem('nova_pos_issuer_logo') || '');
+
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert("La imagen es muy grande. Por favor elige una menor a 2MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setIssuerLogo(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemoveLogo = () => {
+    setIssuerLogo('');
+  };
 
   // Toggle for configuration card
   const [showConfig, setShowConfig] = useState(false);
@@ -85,86 +108,86 @@ export default function PosCalculator() {
   const [posSuccessModal, setPosSuccessModal] = useState<{
     invoiceNumber: string;
     clientName: string;
+    clientRnc?: string;
     totalItems: number;
     subtotal: number;
     taxAmount: number;
     grandTotal: number;
     itemsSummary: { productId: string; name: string; price: number; quantity: number }[];
+    discount?: number;
   } | null>(null);
 
   const [isCapturingPos, setIsCapturingPos] = useState(false);
   const [posShareMessage, setPosShareMessage] = useState<string | null>(null);
 
-  const handleSharePosReceiptImage = async () => {
+  const handleOpenPosReceiptPdf = async (method: 'open' | 'share') => {
     const element = document.getElementById('pos-success-receipt-card');
     if (!element) return;
 
-    // Mensaje descriptivo para WhatsApp
-    const textMsg = `*Recibo de compra (Almacén):* Hola, adjunto el recibo de compra No. ${posSuccessModal?.invoiceNumber || 'POS'} por valor de ${currency} ${posSuccessModal?.grandTotal.toLocaleString()}. *(Por favor, haz Pegar (Ctrl+V) aquí para enviar la foto del tique)*`;
+    const invoiceNum = posSuccessModal?.invoiceNumber || 'POS';
+    const textMsg = `*Factura Digital PDF:* Hola, le comparto la factura No. ${invoiceNum} por un total de ${currency} ${posSuccessModal?.grandTotal.toLocaleString()}. *(El archivo PDF está abierto en su visor de PDF, puede copiarlo o compartirlo desde allí)*`;
     const shareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(textMsg)}`;
     
-    // Abrir inmediatamente síncronamente en el hilo del click para evitar que sea bloqueado por el navegador
-    const whatsAppWindow = window.open(shareUrl, '_blank');
-
     setIsCapturingPos(true);
     setPosShareMessage(null);
     try {
-      const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(element, {
+      const canvas = await safeHtml2canvas(element, {
         backgroundColor: '#ffffff',
-        scale: 2, // High resolution capture
+        scale: 3, // Calidad ultra alta
         useCORS: true,
         logging: false
       });
 
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          throw new Error("No se pudo generar el archivo de imagen.");
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const pdfWidth = 140; // Mayor anchura para formato más grande y nítido
+      const pdfHeight = (imgHeight * pdfWidth) / imgWidth;
+
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: [pdfWidth, pdfHeight]
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+
+      const pdfBlob = pdf.output('blob');
+      const blobUrl = URL.createObjectURL(pdfBlob);
+
+      if (method === 'open') {
+        const pdfWindow = window.open(blobUrl, '_blank');
+        if (!pdfWindow) {
+          setPosShareMessage("⚠️ Su navegador bloqueó la ventana emergente. Por favor, permita las ventanas emergentes o intente de nuevo.");
+        } else {
+          setPosShareMessage("¡Factura PDF abierta en una nueva pestaña sin descargar!");
         }
-
-        const file = new File([blob], `Recibo_${posSuccessModal?.invoiceNumber || 'POS'}.png`, { type: 'image/png' });
-
-        // Intenta usar de forma prioritaria la API nativa de compartir
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      } else {
+        const file = new File([pdfBlob], `Factura_${invoiceNum}.pdf`, { type: 'application/pdf' });
+        
+        // Intentar compartir de forma nativa
+        if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [file] })) {
           try {
             await navigator.share({
               files: [file],
-              title: `Recibo ${posSuccessModal?.invoiceNumber || 'POS'}`,
-              text: `Hola, adjunto el recibo de compra del almacén No. ${posSuccessModal?.invoiceNumber || 'POS'}.`
+              title: `Factura ${invoiceNum}`,
+              text: `Aquí tiene su recibo de compra en formato PDF No. ${invoiceNum}.`
             });
-            setPosShareMessage("¡Recibo compartido exitosamente!");
+            setPosShareMessage("¡Recibo PDF compartido exitosamente por WhatsApp/Compartir nativo!");
             return;
           } catch (shareErr) {
-            console.warn("El compartir nativo fue cancelado o no es soportado:", shareErr);
+            console.warn("Compartido nativo cancelado o no soportado:", shareErr);
           }
         }
 
-        // Descarga directa de la imagen como respaldo
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `Recibo_${posSuccessModal?.invoiceNumber || 'POS'}.png`;
-        link.click();
-
-        // Intenta copiar la imagen al portapapeles para facilitar el Pegar (Ctrl+V) en WhatsApp
-        try {
-          const item = new ClipboardItem({ "image/png": blob });
-          await navigator.clipboard.write([item]);
-          setPosShareMessage("¡Tíquet descargado y copiado al portapapeles! Ve a la pestaña de WhatsApp abierta y haz Pegar (Ctrl+V).");
-        } catch (clipErr) {
-          console.warn("Copiado al portapapeles bloqueado por el navegador:", clipErr);
-          setPosShareMessage("¡Tíquet descargado como imagen! Sube o adjunta la imagen descargada en WhatsApp.");
-        }
-
-        // Si la ventana de WhatsApp fue bloqueada, la reintentamos abrir aquí
-        if (!whatsAppWindow || whatsAppWindow.closed) {
-          window.open(shareUrl, '_blank');
-        }
-
-      }, 'image/png');
+        // WhatsApp Web/Link Fallback
+        window.open(shareUrl, '_blank');
+        window.open(blobUrl, '_blank');
+        setPosShareMessage("Se abrió el visor PDF y la ventana de WhatsApp para adjuntar o copiar el documento.");
+      }
     } catch (err) {
-      console.error("Error al generar imagen de recibo POS:", err);
-      alert("No se pudo procesar la imagen del recibo.");
+      console.error("Error al generar PDF de recibo POS:", err);
+      alert("No se pudo procesar la factura en PDF.");
     } finally {
       setIsCapturingPos(false);
     }
@@ -193,6 +216,9 @@ export default function PosCalculator() {
   useEffect(() => {
     localStorage.setItem('nova_pos_issuer_email', issuerEmail);
   }, [issuerEmail]);
+  useEffect(() => {
+    localStorage.setItem('nova_pos_issuer_logo', issuerLogo);
+  }, [issuerLogo]);
 
   // Suscribirse a inventario real de Firebase
   useEffect(() => {
@@ -371,6 +397,7 @@ export default function PosCalculator() {
       setPosSuccessModal({
         invoiceNumber: generatedCode,
         clientName: posClientName,
+        clientRnc: posClientRnc,
         totalItems: posCart.reduce((sum, item) => sum + item.quantity, 0),
         subtotal: posSubtotal,
         taxAmount: posTaxAmount,
@@ -380,7 +407,8 @@ export default function PosCalculator() {
           name: item.name,
           price: item.price,
           quantity: item.quantity
-        }))
+        })),
+        discount: posDiscount
       });
 
       // Clear basket/cart
@@ -477,6 +505,154 @@ export default function PosCalculator() {
     }
   };
 
+  const handlePrintBotoneraReceipt = () => {
+    if (!posSuccessModal) return;
+    try {
+      const pWin = window.open('', '_blank');
+      if (pWin) {
+        pWin.document.write(`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <title>Ticket ${posSuccessModal.invoiceNumber}</title>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
+              <script src="https://cdn.tailwindcss.com"></script>
+              <style>
+                body {
+                  font-family: 'JetBrains Mono', monospace;
+                  -webkit-print-color-adjust: exact;
+                  print-color-adjust: exact;
+                  background-color: #ffffff;
+                  margin: 0;
+                  padding: 0;
+                  width: 58mm;
+                }
+                @page {
+                  size: 58mm auto;
+                  margin: 0;
+                }
+                @media print {
+                  body {
+                    width: 58mm;
+                    margin: 0;
+                    padding: 2mm 1mm;
+                  }
+                  .no-print {
+                    display: none !important;
+                  }
+                }
+              </style>
+            </head>
+            <body class="text-zinc-900 text-[9.5px] p-[2mm]">
+              <div class="w-full">
+                <!-- Header -->
+                <div class="text-center border-b border-dashed border-zinc-300 pb-2 mb-2 flex flex-col items-center">
+                  ${issuerLogo ? `
+                    <img 
+                      src="${issuerLogo}" 
+                      alt="Logo" 
+                      style="width: 38px; height: 38px; border-radius: 50%; object-fit: cover; margin-bottom: 4px;" 
+                    />
+                  ` : ''}
+                  <h2 class="font-extrabold text-[11px] tracking-tight uppercase leading-tight">${issuerName || 'Financiera Nova'}</h2>
+                  <p class="text-[8px] text-zinc-500 leading-normal mt-0.5">${issuerAddress || 'Santo Domingo, RD'}</p>
+                  <p class="text-[8px] text-zinc-400 leading-normal">RNC: ${issuerRnc || '1-01-88432-1'}</p>
+                  <p class="text-[8px] text-zinc-400 leading-normal">TEL: ${issuerPhone || '(809) 555-0199'}</p>
+                  
+                  <div class="mt-1.5 py-0.5 px-2 bg-zinc-100 rounded text-[9px] font-black inline-block text-zinc-800 border border-zinc-200">
+                    TIQUE POS: ${posSuccessModal.invoiceNumber}
+                  </div>
+                </div>
+
+                <!-- Info Invoice -->
+                <div class="space-y-0.5 text-[8px] border-b border-dashed border-zinc-200 pb-2 mb-2 leading-none">
+                  <p><span class="font-bold">Cliente:</span> ${posSuccessModal.clientName}</p>
+                  ${posSuccessModal.clientRnc ? `<p><span class="font-bold">RNC/Céd:</span> ${posSuccessModal.clientRnc}</p>` : ''}
+                  <p><span class="font-bold">Fecha:</span> ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                </div>
+
+                <!-- Items Table -->
+                <table class="w-full text-[8px] mb-2 leading-tight">
+                  <thead>
+                    <tr class="border-b border-zinc-300 text-left">
+                      <th class="pb-1 font-bold">DESCRIPCIÓN</th>
+                      <th class="text-center pb-1 w-[10mm]">CANT.</th>
+                      <th class="text-right pb-1 w-[16mm]">TOTAL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${posSuccessModal.itemsSummary.map((item: any) => `
+                      <tr class="border-b border-zinc-100 last:border-none">
+                        <td class="py-1 break-words max-w-[24mm]">${item.name}</td>
+                        <td class="py-1 text-center font-medium">${item.quantity}</td>
+                        <td class="py-1 text-right font-bold">${currency} ${(item.quantity * item.price).toLocaleString()}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+
+                <!-- Totals -->
+                <div class="border-t border-dashed border-zinc-300 pt-2 space-y-1 text-[8px] leading-none">
+                  <div class="flex justify-between">
+                    <span>Subtotal:</span>
+                    <span>${currency} ${posSuccessModal.subtotal.toLocaleString()}</span>
+                  </div>
+                  ${posSuccessModal.taxAmount > 0 ? `
+                    <div class="flex justify-between">
+                      <span>ITBIS (${posTaxRate}%):</span>
+                      <span>${currency} ${posSuccessModal.taxAmount.toLocaleString()}</span>
+                    </div>
+                  ` : ''}
+                  ${posSuccessModal.discount && posSuccessModal.discount > 0 ? `
+                    <div class="flex justify-between text-zinc-550">
+                      <span>Descuento:</span>
+                      <span>-${currency} ${posSuccessModal.discount.toLocaleString()}</span>
+                    </div>
+                  ` : ''}
+                  <div class="flex justify-between font-black text-[9.5px] pt-1.5 border-t border-zinc-200 text-zinc-900">
+                    <span>TOTAL POS:</span>
+                    <span>${currency} ${posSuccessModal.grandTotal.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <!-- Footer barcode lookalike or friendly note -->
+                <div class="text-center mt-3 pt-2 border-t border-dashed border-zinc-300">
+                  <p class="text-[7px] text-zinc-400 font-bold uppercase tracking-wider">¡Gracias por preferirnos!</p>
+                  <p class="text-[6.5px] text-zinc-400 mt-0.5">Visite: ${issuerEmail || 'soporte@system.com'}</p>
+                </div>
+              </div>
+
+              <!-- Print panel helper for non-automatic environments -->
+              <div class="mt-4 flex flex-col gap-1.5 no-print p-2 bg-zinc-50 border border-zinc-200 rounded-xl text-center">
+                <span class="text-[7.5px] text-zinc-500">¿No se abrió la ventana de impresión?</span>
+                <div class="flex gap-1 justify-center">
+                  <button onclick="window.print()" class="px-2 py-1 bg-zinc-900 text-white rounded text-[8px] font-bold">Imprimir</button>
+                  <button onclick="window.close()" class="px-2 py-1 bg-zinc-250 text-zinc-700 rounded text-[8px] font-bold">Cerrar</button>
+                </div>
+              </div>
+
+              <script>
+                window.onload = function() {
+                  setTimeout(function() {
+                    window.print();
+                  }, 400);
+                };
+              </script>
+            </body>
+          </html>
+        `);
+        pWin.document.close();
+      } else {
+        window.print();
+      }
+    } catch (error) {
+      console.warn("Popup blocked, fallback printed:", error);
+      window.print();
+    }
+  };
+
   // Live POS calculations
   const posSubtotal = posCart.reduce((acc, curr) => acc + (curr.quantity * curr.price), 0);
   const posTaxAmount = (posSubtotal * posTaxRate) / 100;
@@ -515,62 +691,97 @@ export default function PosCalculator() {
               <Building className="w-4 h-4 text-red-850" />
               Configurar Datos de Tu Empresa o Negocio
             </h3>
-            <p className="text-[11px] text-zinc-500 mb-4">Estos datos saldrán automáticamente impresos en la cabecera de tus tiques y recibos de venta.</p>
+            <p className="text-[11px] text-zinc-500 mb-4">Estos datos y tu logo personalizado saldrán impresos automáticamente en la cabecera de tus tiques y recibos de venta.</p>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-[9px] font-bold text-zinc-450 uppercase mb-1">Nombre Comercial de la Empresa</label>
-                <input 
-                  type="text"
-                  value={issuerName}
-                  onChange={(e) => setIssuerName(e.target.value)}
-                  placeholder="Ej. Comercializadora Pérez SRL"
-                  className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
-                />
+            <div className="flex flex-col md:flex-row gap-5 items-start">
+              {/* Columna Logo Redondo */}
+              <div className="flex flex-col items-center gap-1.5 shrink-0 w-full md:w-auto text-center">
+                <label className="block text-[9px] font-bold text-zinc-455 uppercase tracking-wider select-none">Logo Empresa</label>
+                <div className="relative w-24 h-24 rounded-full border-2 border-dashed border-zinc-300 hover:border-red-650 bg-white flex flex-col items-center justify-center overflow-hidden transition-all group shadow-sm">
+                  {issuerLogo ? (
+                    <>
+                      <img src={issuerLogo} alt="Logo" className="w-full h-full object-cover animate-fade-in" />
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleRemoveLogo}
+                          className="p-1.5 bg-red-600 hover:bg-red-700 text-white rounded-full transition-all shadow-md"
+                          title="Eliminar Logo"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                        <label className="p-1.5 bg-zinc-650 hover:bg-zinc-750 text-white rounded-full transition-all shadow-md cursor-pointer" title="Cambiar Logo">
+                          <Upload className="w-3.5 h-3.5" />
+                          <input type="file" accept="image/*" onChange={handleLogoChange} className="hidden" />
+                        </label>
+                      </div>
+                    </>
+                  ) : (
+                    <label className="w-full h-full flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-50 transition-all p-2 text-center text-zinc-400 group">
+                      <Upload className="w-5 h-5 mb-1.5 text-zinc-300 group-hover:text-red-850 transition-colors" />
+                      <span className="text-[8px] font-extrabold uppercase leading-tight select-none">Elegir Foto</span>
+                      <input type="file" accept="image/*" onChange={handleLogoChange} className="hidden" />
+                    </label>
+                  )}
+                </div>
               </div>
 
-              <div>
-                <label className="block text-[9px] font-bold text-zinc-455 uppercase mb-1">RNC / Registro Único</label>
-                <input 
-                  type="text"
-                  value={issuerRnc}
-                  onChange={(e) => setIssuerRnc(e.target.value)}
-                  placeholder="Ej. 1-01-88432-1"
-                  className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
-                />
-              </div>
+              {/* Columna Campos de Texto */}
+              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 w-full">
+                <div>
+                  <label className="block text-[9px] font-bold text-zinc-450 uppercase mb-1">Nombre Comercial de la Empresa</label>
+                  <input 
+                    type="text"
+                    value={issuerName}
+                    onChange={(e) => setIssuerName(e.target.value)}
+                    placeholder="Ej. Comercializadora Pérez SRL"
+                    className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-[9px] font-bold text-zinc-455 uppercase mb-1">Teléfono de Contacto</label>
-                <input 
-                  type="text"
-                  value={issuerPhone}
-                  onChange={(e) => setIssuerPhone(e.target.value)}
-                  placeholder="Ej. (809) 555-0100"
-                  className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
-                />
-              </div>
+                <div>
+                  <label className="block text-[9px] font-bold text-zinc-455 uppercase mb-1">RNC / Registro Único</label>
+                  <input 
+                    type="text"
+                    value={issuerRnc}
+                    onChange={(e) => setIssuerRnc(e.target.value)}
+                    placeholder="Ej. 1-01-88432-1"
+                    className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
+                  />
+                </div>
 
-              <div className="md:col-span-2">
-                <label className="block text-[9px] font-bold text-zinc-455 uppercase mb-1">Dirección Física Completa</label>
-                <input 
-                  type="text"
-                  value={issuerAddress}
-                  onChange={(e) => setIssuerAddress(e.target.value)}
-                  placeholder="Ej. Calle Duarte #20, Santo Domingo, RD"
-                  className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
-                />
-              </div>
+                <div>
+                  <label className="block text-[9px] font-bold text-zinc-455 uppercase mb-1">Teléfono de Contacto</label>
+                  <input 
+                    type="text"
+                    value={issuerPhone}
+                    onChange={(e) => setIssuerPhone(e.target.value)}
+                    placeholder="Ej. (809) 555-0100"
+                    className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-[9px] font-bold text-zinc-455 uppercase mb-1">Correo Electrónico</label>
-                <input 
-                  type="email"
-                  value={issuerEmail}
-                  onChange={(e) => setIssuerEmail(e.target.value)}
-                  placeholder="Ej. ventas@negocio.com"
-                  className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
-                />
+                <div className="md:col-span-2">
+                  <label className="block text-[9px] font-bold text-zinc-455 uppercase mb-1">Dirección Física Completa</label>
+                  <input 
+                    type="text"
+                    value={issuerAddress}
+                    onChange={(e) => setIssuerAddress(e.target.value)}
+                    placeholder="Ej. Calle Duarte #20, Santo Domingo, RD"
+                    className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[9px] font-bold text-zinc-455 uppercase mb-1">Correo Electrónico</label>
+                  <input 
+                    type="email"
+                    value={issuerEmail}
+                    onChange={(e) => setIssuerEmail(e.target.value)}
+                    placeholder="Ej. ventas@negocio.com"
+                    className="w-full px-3 py-2 bg-white border border-zinc-250 rounded-xl text-xs font-bold focus:ring-1 focus:ring-red-800 outline-none"
+                  />
+                </div>
               </div>
             </div>
 
@@ -904,7 +1115,7 @@ export default function PosCalculator() {
       {/* POS Success and voucher print modal */}
       {posSuccessModal && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs select-none">
-          <div className="bg-white rounded-3xl border border-zinc-200 max-w-sm w-full p-6 space-y-5 shadow-2xl relative text-center">
+          <div className="bg-white rounded-3xl border border-zinc-200 max-w-md w-full p-6 space-y-5 shadow-2xl relative text-center max-h-[90vh] overflow-y-auto">
             <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mx-auto text-emerald-700">
               <CheckCircle2 className="w-6 h-6 animate-pulse" />
             </div>
@@ -916,9 +1127,16 @@ export default function PosCalculator() {
             {/* Este es el contenedor del tíquet físico que se convertirá en imagen */}
             <div 
               id="pos-success-receipt-card" 
-              className="bg-white border border-zinc-200 p-5 rounded-2xl text-left text-xs space-y-3 shadow-xs select-text text-zinc-900 mx-auto w-full block"
+              className="bg-white border border-zinc-200 p-6 rounded-2xl text-left text-xs space-y-3 shadow-xs select-text text-zinc-900 mx-auto max-w-[400px] w-full block"
             >
-              <div className="text-center border-b border-dashed border-zinc-200 pb-3 mb-3">
+              <div className="text-center border-b border-dashed border-zinc-200 pb-3 mb-3 flex flex-col items-center">
+                {issuerLogo && (
+                  <img 
+                    src={issuerLogo} 
+                    alt="Logo" 
+                    className="w-12 h-12 rounded-full object-cover mb-2 border border-zinc-150 shadow-xs shrink-0 animate-fade-in" 
+                  />
+                )}
                 <h5 className="font-extrabold text-[13px] tracking-tight uppercase text-zinc-900">
                   {issuerName || 'Financiera Nova'}
                 </h5>
@@ -931,7 +1149,7 @@ export default function PosCalculator() {
 
               <div className="text-[11px] space-y-1 text-zinc-600 border-b border-zinc-100 pb-2">
                 <p><strong>Cliente:</strong> {posSuccessModal.clientName}</p>
-                {posClientRnc && <p><strong>RNC:</strong> {posClientRnc}</p>}
+                {posSuccessModal.clientRnc && <p><strong>RNC:</strong> {posSuccessModal.clientRnc}</p>}
                 <p><strong>Fecha:</strong> {new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
               </div>
 
@@ -941,9 +1159,13 @@ export default function PosCalculator() {
                   <span>Total</span>
                 </div>
                 {posSuccessModal.itemsSummary.map((item, idx) => (
-                  <div key={idx} className="flex justify-between text-[11px]">
-                    <span className="font-semibold text-zinc-800 truncate max-w-[190px]">{item.quantity}x {item.name}</span>
-                    <span className="font-mono text-zinc-900 font-bold">{currency} {(item.quantity * item.price).toLocaleString()}</span>
+                  <div key={idx} className="flex justify-between items-start text-[11px] py-1.5 border-b border-zinc-100 overflow-visible">
+                    <div className="font-semibold text-zinc-800 leading-relaxed pb-1.5 pr-2 break-all md:break-words whitespace-normal max-w-[240px] overflow-visible">
+                      {item.quantity}x {item.name}
+                    </div>
+                    <span className="font-mono text-zinc-900 font-bold shrink-0 pt-0.5">
+                      {currency} {(item.quantity * item.price).toLocaleString()}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -957,10 +1179,10 @@ export default function PosCalculator() {
                   <span>ITBIS ({posTaxRate}%):</span>
                   <span>{currency} {posSuccessModal.taxAmount.toLocaleString()}</span>
                 </div>
-                {posDiscount > 0 && (
+                {posSuccessModal.discount !== undefined && posSuccessModal.discount > 0 && (
                   <div className="flex justify-between text-zinc-500 text-[11px]">
                     <span>Descuento:</span>
-                    <span>-{currency} {posDiscount.toLocaleString()}</span>
+                    <span>-{currency} {posSuccessModal.discount.toLocaleString()}</span>
                   </div>
                 )}
                 <div className="flex justify-between font-black text-red-850 pt-2 border-t border-zinc-100 text-xs font-serif">
@@ -976,46 +1198,81 @@ export default function PosCalculator() {
             </div>
 
             {posShareMessage && (
-              <div className="bg-emerald-50 text-emerald-800 text-[11px] font-bold p-3 rounded-xl border border-emerald-150 py-2 text-left">
+              <div className="bg-emerald-50 text-emerald-850 text-[11px] font-bold p-3 rounded-xl border border-emerald-150 py-2 text-left">
                 💬 {posShareMessage}
               </div>
             )}
 
             <div className="flex flex-col gap-2">
-              <div className="flex gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={handlePrintModalReceipt}
-                  className="flex-1 py-2.5 bg-zinc-900 hover:bg-zinc-850 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5"
+                  className="py-2.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-900 rounded-xl text-[11px] font-bold transition-all flex items-center justify-center gap-1.5"
+                  title="Imprimir tique estándar de 80mm"
                 >
-                  <Printer className="w-4 h-4 text-emerald-400 animate-pulse" />
-                  Imprimir Tique
+                  <Printer className="w-3.5 h-3.5" />
+                  Tique (80mm)
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPosSuccessModal(null)}
-                  className="flex-1 py-2.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-850 rounded-xl text-xs font-black transition-all"
+                  onClick={handlePrintBotoneraReceipt}
+                  className="py-2.5 bg-zinc-900 hover:bg-zinc-850 text-white rounded-xl text-[11px] font-extrabold transition-all flex items-center justify-center gap-1.5"
+                  title="Imprimir en tiqueteras térmicas pequeñas (58mm)"
                 >
-                  Listo / Nueva
+                  <Printer className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                  Botonera (58mm)
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPosSuccessModal(null)}
+                  className="w-full py-2.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-850 rounded-xl text-xs font-black transition-all"
+                >
+                  Listo / Nueva Factura
                 </button>
               </div>
 
               <button
                 type="button"
                 disabled={isCapturingPos}
-                onClick={handleSharePosReceiptImage}
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-350 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm"
+                onClick={() => handleOpenPosReceiptPdf('open')}
+                className="w-full py-2.5 bg-red-650 hover:bg-red-700 disabled:bg-zinc-350 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm"
               >
                 {isCapturingPos ? (
-                  <span className="animate-pulse">Generando Imagen...</span>
+                  <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
                 ) : (
-                  <>
-                    <svg className="w-4 h-4 fill-current text-white" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M12.012 3c-4.965 0-9.01 4.05-9.01 9.01 0 1.583.411 3.125 1.196 4.49l-1.196 4.5 4.603-1.21A8.93 8.93 0 0 0 12.011 21c4.966 0 9.01-4.048 9.01-9.009S16.977 3 12.012 3zm4.992 12.871c-.206.581-1.014 1.135-1.564 1.205-.5.06-1.149.079-1.85-.152-.619-.203-1.5-.544-2.541-1.002-4.414-1.942-7.237-6.526-7.457-6.824-.22-.298-1.782-2.396-1.782-4.572s1.114-3.243 1.513-3.69c.399-.446.879-.558 1.171-.558.292 0 .584.004.839.015.267.012.623-.105.973.743.361.874 1.233 3.033 1.338 3.256.106.223.176.48.028.773-.148.296-.223.479-.444.739-.22.259-.464.577-.662.775-.22.22-.453.46-.195.903.257.442.1.848 1.201 1.838 1.417 1.266 2.613 1.657 2.978 1.838.365.181.579.152.793-.1s.924-1.082 1.174-1.455c.249-.373.499-.311.839-.185.341.127 2.162 1.026 2.536 1.212.373.187.623.277.712.433.09.155.09.897-.116 1.478z"/>
-                    </svg>
-                    Compartir en WhatsApp 💬
-                  </>
+                  <svg className="w-4 h-4 text-white fill-none stroke-current stroke-2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
                 )}
+                {isCapturingPos ? "Generando Factura..." : "Ingresar a Factura en PDF 📄"}
+              </button>
+
+              <button
+                type="button"
+                disabled={isCapturingPos}
+                onClick={() => handleOpenPosReceiptPdf('share')}
+                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-350 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm text-center"
+              >
+                <svg className="w-4 h-4 text-white fill-none stroke-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 10.742l4.632-2.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316l-4.632-2.316m0 0a3 3 0 10-5.367-2.684 3 3 0 005.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                </svg>
+                Compartir por WhatsApp (Sin Descarga) 💬
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePrintBotoneraReceipt}
+                className="w-full py-2.5 bg-zinc-900 hover:bg-zinc-850 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm text-center"
+              >
+                <svg className="w-4 h-4 text-emerald-400 fill-none stroke-current stroke-2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                Imprimir en Botonera (55mm - 58mm) 🖨️
               </button>
             </div>
           </div>

@@ -9,7 +9,8 @@ import {
   updateDoc, 
   deleteDoc, 
   setDoc,
-  getDoc
+  getDoc,
+  getDocs
 } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { Transaction, SavingGoal, UserProfile, Category, InventoryItem, DailySalesSummary } from '../types';
@@ -259,6 +260,75 @@ export const saveSystemSettings = async (settings: {
     await setDoc(doc(db, path), settings, { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+};
+
+// --- SaaS SUBSCRIPTION & PHONE CONTROL SYSTEM HELPERS ---
+
+export const isPhoneRegistered = async (phone: string): Promise<boolean> => {
+  const path = `registered_phones/${phone}`;
+  try {
+    const docSnap = await getDoc(doc(db, path));
+    return docSnap.exists();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+    return false;
+  }
+};
+
+export const registerUserPhone = async (uid: string, email: string, phone: string): Promise<void> => {
+  const phonePath = `registered_phones/${phone}`;
+  const userPath = `users/${uid}`;
+  try {
+    // 1. Lock phone to UID
+    await setDoc(doc(db, phonePath), { uid, email });
+    
+    // 2. Set default subscription dates and details on user profile
+    const today = new Date().toISOString().split('T')[0];
+    // Give 30 days of standard free trial / subscription start
+    const expiryDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    
+    await updateDoc(doc(db, userPath), {
+      phone: phone,
+      subscriptionStart: today,
+      subscriptionEnd: expiryDate,
+      subscriptionStatus: 'activa'
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${phonePath} or ${userPath}`);
+  }
+};
+
+export const getAllUserProfiles = async (): Promise<UserProfile[]> => {
+  const path = 'users';
+  try {
+    const querySnapshot = await getDocs(collection(db, path));
+    const users: UserProfile[] = [];
+    querySnapshot.forEach((d) => {
+      users.push({ ...d.data(), uid: d.id } as UserProfile);
+    });
+    return users;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+    return [];
+  }
+};
+
+export const updateUserProfileByAdmin = async (userId: string, updates: Partial<UserProfile>): Promise<void> => {
+  const path = `users/${userId}`;
+  try {
+    await updateDoc(doc(db, path), updates);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+};
+
+export const releaseRegisteredPhone = async (phone: string): Promise<void> => {
+  const path = `registered_phones/${phone}`;
+  try {
+    await deleteDoc(doc(db, path));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 };
 
