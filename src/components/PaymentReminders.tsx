@@ -56,63 +56,7 @@ export default function PaymentReminders() {
   const [reminders, setReminders] = useState<PaymentReminder[]>(() => {
     const saved = localStorage.getItem('nova_payment_reminders');
     if (saved) return JSON.parse(saved);
-
-    // Initial helpful templates as requested
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = tomorrow.toISOString().split('T')[0];
-
-    const inFiveDays = new Date();
-    inFiveDays.setDate(inFiveDays.getDate() + 5);
-    const inFiveDaysStr = inFiveDays.toISOString().split('T')[0];
-
-    return [
-      {
-        id: 'rem-1',
-        title: 'Pago Mensual de Claro Internet',
-        category: 'internet',
-        amount: 2500,
-        dueDate: tomorrowStr, // Due tomorrow, which triggers "Tu pago vence mañana"
-        emailNotification: true,
-        completed: false
-      },
-      {
-        id: 'rem-2',
-        title: 'Suscripción Netflix Familiar',
-        category: 'Netflix',
-        amount: 750,
-        dueDate: inFiveDaysStr,
-        emailNotification: true,
-        completed: false
-      },
-      {
-        id: 'rem-3',
-        title: 'Alquiler Apartamento Naco',
-        category: 'renta',
-        amount: 35000,
-        dueDate: '2026-06-01',
-        emailNotification: true,
-        completed: false
-      },
-      {
-        id: 'rem-4',
-        title: 'Tarjeta de Crédito BHD',
-        category: 'tarjetas',
-        amount: 15400,
-        dueDate: '2026-06-05',
-        emailNotification: true,
-        completed: false
-      },
-      {
-        id: 'rem-5',
-        title: 'Cuota Préstamo de Vehículo',
-        category: 'préstamos',
-        amount: 12000,
-        dueDate: '2026-06-10',
-        emailNotification: true,
-        completed: false
-      }
-    ];
+    return [];
   });
 
   // Setup / credentials Drawer Configs

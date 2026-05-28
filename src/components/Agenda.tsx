@@ -56,90 +56,19 @@ export default function Agenda() {
   const [events, setEvents] = useState<AgendaEvent[]>(() => {
     const saved = localStorage.getItem('nova_agenda_events');
     if (saved) return JSON.parse(saved);
-    return [
-      {
-        id: '1',
-        title: 'Cobro de Cuota Mensual - Alquiler Comercial',
-        date: new Date().toISOString().split('T')[0],
-        time: '10:00',
-        type: 'collection',
-        clientName: 'Constructora del Caribe SRL',
-        amount: 35000,
-        completed: false,
-        notes: 'Llamar antes de ir para confirmar recepción del cheque'
-      },
-      {
-        id: '2',
-        title: 'Cita de Asesoramiento Financiero',
-        date: (() => {
-          const d = new Date();
-          d.setDate(d.getDate() + 1);
-          return d.toISOString().split('T')[0];
-        })(),
-        time: '15:30',
-        type: 'meeting',
-        clientName: 'Eduardo Martínez',
-        amount: 4500,
-        completed: false,
-        notes: 'Conversar sobre estrategias impositivas e ITBIS'
-      }
-    ];
+    return [];
   });
 
   const [contacts, setContacts] = useState<Contact[]>(() => {
     const saved = localStorage.getItem('nova_agenda_contacts');
     if (saved) return JSON.parse(saved);
-    return [
-      {
-        id: '1',
-        name: 'Constructora del Caribe SRL',
-        phone: '809-555-0122',
-        email: 'caribe.const@gmail.com',
-        company: 'CONCARIBE',
-        debtAmount: 35000,
-        status: 'debtor',
-        notes: 'Excelente cliente comercial, alquiler mensual recurrente'
-      },
-      {
-        id: '2',
-        name: 'Eduardo Martínez',
-        phone: '829-555-8941',
-        email: 'emartinez@finance.com',
-        company: 'E&M Consulting',
-        debtAmount: 0,
-        status: 'active',
-        notes: 'Cliente de consultoría recurrente'
-      },
-      {
-        id: '3',
-        name: 'Lucía Paredes',
-        phone: '809-555-4321',
-        email: 'lucia_p@outlook.com',
-        company: 'Ventas Santo Domingo',
-        debtAmount: 0,
-        status: 'prospect',
-        notes: 'Interesada en programa de ahorros Nova'
-      }
-    ];
+    return [];
   });
 
   const [notes, setNotes] = useState<QuickNote[]>(() => {
     const saved = localStorage.getItem('nova_agenda_notes');
     if (saved) return JSON.parse(saved);
-    return [
-      {
-        id: '1',
-        content: 'Revisar tasas de cambio del dólar e ITBIS para la próxima emisión de facturas.',
-        color: 'red',
-        createdAt: new Date().toLocaleDateString()
-      },
-      {
-        id: '2',
-        content: 'Imprimir estados de cuenta del inventario para auditoría interna.',
-        color: 'amber',
-        createdAt: new Date().toLocaleDateString()
-      }
-    ];
+    return [];
   });
 
   // State managers

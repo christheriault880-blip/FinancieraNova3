@@ -47,21 +47,7 @@ export default function Loans() {
   const [loans, setLoans] = useState<Loan[]>(() => {
     const saved = localStorage.getItem('nova_loans_list');
     if (saved) return JSON.parse(saved);
-    return [
-      {
-        id: 'loan-1',
-        partnerRnc: '1-02-45811-9',
-        partnerName: 'Juan Bautista Gómez',
-        hasGuarantor: true,
-        guarantorName: 'Marcos Aurelio Pérez',
-        amount: 150000,
-        taxRate: 12,
-        moraValue: 2000,
-        moraType: 'fixed',
-        date: new Date().toISOString().split('T')[0],
-        notes: 'Garantía prendaria regularizada. Cuotas los 25 de cada mes.'
-      }
-    ];
+    return [];
   });
 
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
