@@ -25,7 +25,8 @@ import {
   Lock,
   AlertCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Calculator
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -43,13 +44,14 @@ import Profile from './components/Profile';
 import AdminPanel from './components/AdminPanel';
 import Inventory from './components/Inventory';
 import Billing from './components/Billing';
+import PosCalculator from './components/PosCalculator';
 import Agenda from './components/Agenda';
 import NotificationsPopover from './components/NotificationsPopover';
 import Loans from './components/Loans';
 import PaymentReminders from './components/PaymentReminders';
 import { BellRing } from 'lucide-react';
 
-type Tab = 'dashboard' | 'transactions' | 'savings' | 'ai' | 'profile' | 'admin' | 'inventory' | 'billing' | 'agenda' | 'loans' | 'reminders';
+type Tab = 'dashboard' | 'transactions' | 'savings' | 'ai' | 'profile' | 'admin' | 'inventory' | 'billing' | 'pos_billing' | 'agenda' | 'loans' | 'reminders';
 
 const categories: Category[] = ['Comida', 'Transporte', 'Ocio', 'Vivienda', 'Salud', 'Suscripciones', 'Otros'];
 
@@ -251,6 +253,7 @@ export default function App() {
     { id: 'savings', label: 'Ahorro', icon: Wallet },
     { id: 'inventory', label: 'Inventario', icon: Boxes },
     { id: 'billing', label: 'Facturas', icon: FileText },
+    { id: 'pos_billing', label: 'Cálculo Almacén', icon: Calculator },
     { id: 'agenda', label: 'Agenda', icon: Calendar },
     { id: 'reminders', label: 'Recordatorios', icon: BellRing },
     { id: 'ai', label: 'IA Assistant', icon: MessageSquareText },
@@ -568,6 +571,7 @@ export default function App() {
               {activeTab === 'savings' && <Savings />}
               {activeTab === 'inventory' && <Inventory />}
               {activeTab === 'billing' && <Billing />}
+              {activeTab === 'pos_billing' && <PosCalculator />}
               {activeTab === 'agenda' && <Agenda />}
               {activeTab === 'reminders' && <PaymentReminders />}
               {activeTab === 'ai' && <AIChat />}

@@ -25,7 +25,6 @@ import {
   addTransaction 
 } from '../services/firestoreService';
 import { InventoryItem } from '../types';
-import PosCalculator from './PosCalculator';
 
 interface InvoiceItem {
   id: string;
@@ -69,6 +68,40 @@ const convertAmount = (amount: number, from: string, to: string) => {
   const toRate = EXCHANGE_RATES[to] || 1;
   const inBase = amount * fromRate;
   return Number((inBase / toRate).toFixed(2));
+};
+
+const getWhatsAppShareUrl = (invoice: any) => {
+  if (!invoice) return '';
+  const isPos = invoice.invoiceNumber && invoice.invoiceNumber.startsWith('POS');
+  const emojiTitle = isPos ? '🛍️ *RECIBO DE COMPRA (ALMACÉN)*' : '📄 *FACTURA DE SERVICIOS*';
+  
+  const itemsText = invoice.items && invoice.items.length > 0 
+    ? invoice.items.map((item: any) => `- ${item.quantity}x ${item.description || item.name} (${invoice.currency || 'RD$'} ${item.price.toLocaleString()} c/u) => ${invoice.currency || 'RD$'} ${(item.quantity * item.price).toLocaleString()}`).join('\n')
+    : 'No hay detalles de conceptos.';
+
+  const taxLabel = invoice.taxRate ? `ITBIS (${invoice.taxRate}%):` : 'Impuestos:';
+  
+  const text = `${emojiTitle}
+----------------------------------------
+*Emisor:* ${invoice.issuerName || 'Financiera Nova'}
+*RNC Emisor:* ${invoice.issuerRnc || '1-01-88432-1'}
+*No. Factura:* ${invoice.invoiceNumber}
+*Fecha:* ${invoice.issueDate ? new Date(invoice.issueDate).toLocaleDateString() : new Date().toLocaleDateString()}
+----------------------------------------
+*Cliente:* ${invoice.clientName}
+${invoice.clientRnc ? `*RNC Cliente:* ${invoice.clientRnc}\n` : ''}----------------------------------------
+*Detalle:*
+${itemsText}
+----------------------------------------
+*Subtotal:* ${invoice.currency || 'RD$'} ${invoice.subtotal.toLocaleString()}
+${invoice.taxAmount ? `*${taxLabel}* ${invoice.currency || 'RD$'} ${invoice.taxAmount.toLocaleString()}\n` : ''}${invoice.discount ? `*Descuento:* -${invoice.currency || 'RD$'} ${invoice.discount.toLocaleString()}\n` : ''}*TOTAL NETO:* ${invoice.currency || 'RD$'} ${invoice.grandTotal.toLocaleString()}
+---------
+*Estado:* ${invoice.status === 'paid' ? 'COBRADA / PAGADA ✅' : 'PENDIENTE DE PAGO ⚠️'}
+
+¡Gracias por su preferencia!
+Enviado desde *Financiera Nova App*`;
+
+  return `https://wa.me/?text=${encodeURIComponent(text)}`;
 };
 
 export default function Billing() {
@@ -120,27 +153,85 @@ export default function Billing() {
   });
   const [savedSearchTerm, setSavedSearchTerm] = useState('');
 
-  // Navigation tabs for billing sub-modes
-  const [billingSubTab, setBillingSubTab] = useState<'pos_calculator' | 'classic_billing'>('pos_calculator');
+  // WhatsApp Share Image Modal state variables
+  const [whatsAppModalInvoice, setWhatsAppModalInvoice] = useState<SavedInvoice | null>(null);
+  const [isCapturingHistory, setIsCapturingHistory] = useState(false);
+  const [historyShareMessage, setHistoryShareMessage] = useState<string | null>(null);
 
-  // POS / Calculator Mode state variables
-  const [posSearchSearch, setPosSearchSearch] = useState('');
-  const [posCart, setPosCart] = useState<{ id: string; productId: string; name: string; price: number; quantity: number; maxStock: number }[]>([]);
-  const [posClientName, setPosClientName] = useState('Cliente General POS');
-  const [posClientRnc, setPosClientRnc] = useState('');
-  const [posTaxRate, setPosTaxRate] = useState(18); // default ITBIS 18%
-  const [posDiscount, setPosDiscount] = useState(0); 
-  const [posSuccessModal, setPosSuccessModal] = useState<{
-    invoiceNumber: string;
-    clientName: string;
-    totalItems: number;
-    subtotal: number;
-    taxAmount: number;
-    grandTotal: number;
-    itemsSummary: { productId: string; name: string; price: number; quantity: number }[];
-  } | null>(null);
-  const [isProcessingPos, setIsProcessingPos] = useState(false);
-  const [productQuantitiesInput, setProductQuantitiesInput] = useState<Record<string, number>>({});
+  const handleShareHistoryInvoiceImage = async (inv: SavedInvoice) => {
+    const element = document.getElementById('history-invoice-capture-card');
+    if (!element) return;
+
+    // Mensaje descriptivo para WhatsApp
+    const textMsg = `*Recibo digital:* Hola, adjunto el recibo de compra No. ${inv.invoiceNumber} por valor de ${inv.currency || 'RD$'} ${inv.grandTotal.toLocaleString()}. *(Por favor, haz Pegar (Ctrl+V) aquí para enviar la foto del tique)*`;
+    const shareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(textMsg)}`;
+    
+    // Se abre inmediatamente de forma síncrona en el hilo del clic para evitar que el navegador lo bloquee como un popup
+    const whatsAppWindow = window.open(shareUrl, '_blank');
+
+    setIsCapturingHistory(true);
+    setHistoryShareMessage(null);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(element, {
+        backgroundColor: '#ffffff',
+        scale: 2, // High resolution capture
+        useCORS: true,
+        logging: false
+      });
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          throw new Error("No se pudo generar el archivo de imagen.");
+        }
+
+        const file = new File([blob], `Recibo_${inv.invoiceNumber}.png`, { type: 'image/png' });
+
+        // Intenta usar de forma prioritaria la API nativa de compartir
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          try {
+            await navigator.share({
+              files: [file],
+              title: `Recibo ${inv.invoiceNumber}`,
+              text: `Hola, adjunto el recibo de compra No. ${inv.invoiceNumber}.`
+            });
+            setHistoryShareMessage("¡Recibo compartido exitosamente!");
+            return;
+          } catch (shareErr) {
+            console.warn("El compartir nativo fue cancelado o no es soportado:", shareErr);
+          }
+        }
+
+        // Descarga directa de la imagen
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Recibo_${inv.invoiceNumber}.png`;
+        link.click();
+
+        // Copia la imagen al portapapeles para facilitar el Pegar (Ctrl+V) en WhatsApp
+        try {
+          const item = new ClipboardItem({ "image/png": blob });
+          await navigator.clipboard.write([item]);
+          setHistoryShareMessage("¡Tíquet descargado y copiado al portapapeles! Ve a la pestaña de WhatsApp abierta y haz Pegar (Ctrl+V).");
+        } catch (clipErr) {
+          console.warn("Copiado al portapapeles bloqueado por el navegador:", clipErr);
+          setHistoryShareMessage("¡Tíquet descargado como imagen! Sube o adjunta la imagen descargada en WhatsApp.");
+        }
+
+        // Si la ventana de WhatsApp fue bloqueada de alguna forma, la reintentamos abrir aquí
+        if (!whatsAppWindow || whatsAppWindow.closed) {
+          window.open(shareUrl, '_blank');
+        }
+
+      }, 'image/png');
+    } catch (err) {
+      console.error("Error al generar imagen de factura:", err);
+      alert("No se pudo procesar la imagen de la factura.");
+    } finally {
+      setIsCapturingHistory(false);
+    }
+  };
 
   // Save changes to localStorage on change
   useEffect(() => {
@@ -342,285 +433,13 @@ export default function Billing() {
     }
   };
 
-  // POS calculations (declared early to be usable in save helpers)
-  const posSubtotal = posCart.reduce((acc, curr) => acc + (curr.quantity * curr.price), 0);
-  const posTaxAmount = (posSubtotal * posTaxRate) / 100;
-  const posGrandTotal = Math.max(0, posSubtotal + posTaxAmount - posDiscount);
 
-  // POS/Calculator Cart handlers and inventory checkout method
-  const handleAddProductToPosCart = (prod: InventoryItem) => {
-    const qty = productQuantitiesInput[prod.id] || 1;
-    const stockAvailable = prod.stock || 0;
-    
-    if (qty <= 0) {
-      alert("Por favor ajuste una cantidad válida de al menos 1 unidad.");
-      return;
-    }
-    
-    if (qty > stockAvailable) {
-      alert(`⚠️ No puede vender más cantidad de la disponible en inventario (${stockAvailable} u.).`);
-      return;
-    }
 
-    // Check what is already in the cart for this product
-    const existing = posCart.find(item => item.productId === prod.id);
-    const existingQty = existing ? existing.quantity : 0;
 
-    if (existingQty + qty > stockAvailable) {
-      alert(`⚠️ Límite Excedido: Ya tiene ${existingQty} unidades en el carrito y está intentando agregar ${qty} más, lo cual supera el stock disponible de ${stockAvailable} unidades.`);
-      return;
-    }
 
-    if (existing) {
-      setPosCart(posCart.map(item => 
-        item.productId === prod.id 
-          ? { ...item, quantity: item.quantity + qty }
-          : item
-      ));
-    } else {
-      setPosCart([
-        ...posCart,
-        {
-          id: 'pos-' + Date.now() + Math.random().toString().substring(2,6),
-          productId: prod.id,
-          name: prod.name,
-          price: prod.price || prod.value || 0,
-          quantity: qty,
-          maxStock: stockAvailable
-        }
-      ]);
-    }
 
-    // Reset input back to 1 for best UX flow
-    setProductQuantitiesInput(prev => ({ ...prev, [prod.id]: 1 }));
-  };
 
-  const handleUpdateCartQty = (productId: string, newQty: number) => {
-    const foundProduct = inventoryItems.find(it => it.id === productId);
-    const maxPoss = foundProduct ? (foundProduct.stock || 0) : 99999;
-    
-    if (newQty <= 0) {
-      setPosCart(posCart.filter(item => item.productId !== productId));
-      return;
-    }
 
-    const cappedQty = Math.min(newQty, maxPoss);
-    if (newQty > maxPoss) {
-      alert(`⚠️ Límite de Inventario: El stock máximo disponible para este producto es de ${maxPoss} unidades.`);
-    }
-
-    setPosCart(posCart.map(item => 
-      item.productId === productId 
-         ? { ...item, quantity: cappedQty }
-         : item
-    ));
-  };
-
-  const handleRemovePosCartItem = (productId: string) => {
-    setPosCart(posCart.filter(item => item.productId !== productId));
-  };
-
-  const handleSavePosInvoice = async () => {
-    if (!user) {
-      alert('Debe iniciar sesión para registrar y guardar ventas en el inventario.');
-      return;
-    }
-    if (posCart.length === 0) {
-      alert('🛒 El carrito de facturación está vacío. Elija un producto de inventario.');
-      return;
-    }
-
-    setIsProcessingPos(true);
-    try {
-      // 1. Final confirmation check of stock availability
-      const stockErrors: string[] = [];
-      for (const item of posCart) {
-        const matchingDbItem = inventoryItems.find(it => it.id === item.productId);
-        if (matchingDbItem) {
-          const currentDbStock = matchingDbItem.stock || 0;
-          if (item.quantity > currentDbStock) {
-            stockErrors.push(`"${matchingDbItem.name}" no tiene suficiente stock. Disponible: ${currentDbStock} u., Deseado: ${item.quantity} u.`);
-          }
-        }
-      }
-
-      if (stockErrors.length > 0) {
-        alert(`❌ Error de Stock en Inventario:\n\n${stockErrors.join('\n')}\n\nPor favor retire o reduzca el producto.`);
-        setIsProcessingPos(false);
-        return;
-      }
-
-      // 2. Adjust stock levels in Firestore database automatically
-      for (const item of posCart) {
-        const dbItem = inventoryItems.find(it => it.id === item.productId);
-        if (dbItem) {
-          const originalStock = dbItem.stock || 0;
-          const updatedStock = Math.max(0, originalStock - item.quantity);
-          const updatedSold = (dbItem.totalSold || 0) + item.quantity;
-          const updatedIncome = (dbItem.salesIncome || 0) + (item.quantity * item.price);
-
-          await updateInventoryItem(user.uid, item.productId, {
-            stock: updatedStock,
-            totalSold: updatedSold,
-            salesIncome: updatedIncome
-          });
-        }
-      }
-
-      // 3. Register financial transaction in cash flow ledger 
-      const generatedCode = `POS-${Math.floor(100000 + Math.random() * 900000)}`;
-      await addTransaction(user.uid, {
-        amount: posGrandTotal,
-        category: 'Otros',
-        description: `Cobro en POS: Factura ${generatedCode} para ${posClientName}`,
-        date: new Date().toISOString(),
-        type: 'income'
-      });
-
-      // 4. Record as an Archived Invoice in the local invoice list so they have a backup print voucher
-      const convertedItems: InvoiceItem[] = posCart.map(item => ({
-        id: item.id,
-        productId: item.productId,
-        description: item.name,
-        quantity: item.quantity,
-        price: item.price
-      }));
-
-      const newHistoryInvoice: SavedInvoice = {
-        id: 'inv-' + Date.now(),
-        invoiceNumber: generatedCode,
-        clientName: posClientName,
-        clientRnc: posClientRnc,
-        clientEmail: '',
-        issueDate: new Date().toISOString().split('T')[0],
-        dueDate: new Date().toISOString().split('T')[0],
-        taxRate: posTaxRate,
-        discount: posDiscount,
-        currency: currency,
-        status: 'paid', // Instant checkout invoices are fully paid
-        items: convertedItems,
-        issuerName: issuerName,
-        issuerRnc: issuerRnc,
-        issuerAddress: issuerAddress,
-        issuerPhone: issuerPhone,
-        issuerEmail: issuerEmail,
-        subtotal: posSubtotal,
-        taxAmount: posTaxAmount,
-        grandTotal: posGrandTotal
-      };
-
-      const updatedHistory = [newHistoryInvoice, ...savedInvoices];
-      setSavedInvoices(updatedHistory);
-
-      // Save modal state details to show user beautiful receipt details
-      setPosSuccessModal({
-        invoiceNumber: generatedCode,
-        clientName: posClientName,
-        totalItems: posCart.reduce((sum, item) => sum + item.quantity, 0),
-        subtotal: posSubtotal,
-        taxAmount: posTaxAmount,
-        grandTotal: posGrandTotal,
-        itemsSummary: posCart.map(item => ({
-          productId: item.productId,
-          name: item.name,
-          price: item.price,
-          quantity: item.quantity
-        }))
-      });
-
-      // Clear basket/cart
-      setPosCart([]);
-      setPosClientName('Cliente General POS');
-      setPosClientRnc('');
-      setPosDiscount(0);
-    } catch (err) {
-      console.error("Error al procesar el checkout POS:", err);
-      alert("Ocurrió un error guardando y descontando del almacén. Por favor contacte soporte.");
-    } finally {
-      setIsProcessingPos(false);
-    }
-  };
-
-  const handlePrintModalReceipt = () => {
-    if (!posSuccessModal) return;
-    try {
-      const pWin = window.open('', '_blank');
-      if (pWin) {
-        pWin.document.write(`
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <title>Recibo ${posSuccessModal.invoiceNumber}</title>
-              <meta charset="utf-8">
-              <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-              <script src="https://cdn.tailwindcss.com"></script>
-              <style>
-                body { font-family: 'Space Grotesk', sans-serif; }
-                .ticket { font-family: 'JetBrains Mono', monospace; width: 80mm; padding: 5px; }
-              </style>
-            </head>
-            <body class="bg-zinc-100 p-8 flex justify-center">
-              <div class="bg-white p-6 rounded-2xl shadow-md border border-zinc-250 max-w-sm">
-                <div class="text-center border-b border-dashed border-zinc-200 pb-4 mb-4">
-                  <h2 class="font-bold text-sm tracking-tight">\${issuerName || 'Financiera Nova'}</h2>
-                  <p class="text-[10px] text-zinc-500">\${issuerAddress || 'Santo Domingo, RD'}</p>
-                  <p class="text-[9px] text-zinc-400">RNC: \${issuerRnc || '1-01-88432-1'}</p>
-                  <p class="text-xs font-black text-red-800 mt-2">\${posSuccessModal.invoiceNumber}</p>
-                </div>
-                <div class="text-xs space-y-2 mb-4">
-                  <p><strong>Cliente:</strong> \${posSuccessModal.clientName}</p>
-                  <p><strong>Fecha:</strong> \${new Date().toLocaleDateString()} \${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
-                </div>
-                <table class="w-full text-xs mb-4">
-                  <thead>
-                    <tr class="border-b border-zinc-200">
-                      <th class="text-left pb-1 font-bold">Item</th>
-                      <th class="text-center pb-1">Cant.</th>
-                      <th class="text-right pb-1">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    \${posSuccessModal.itemsSummary.map((item: any) => \`
-                      <tr>
-                        <td class="py-1 truncate max-w-[150px] font-medium">\${item.name}</td>
-                        <td class="py-1 text-center font-bold">\${item.quantity}</td>
-                        <td class="py-1 text-right font-black">\${currency} \${(item.quantity * item.price).toLocaleString()}</td>
-                      </tr>
-                    \`).join('')}
-                  </tbody>
-                </table>
-                <div class="border-t border-dashed border-zinc-200 pt-3 space-y-1.5 text-xs">
-                  <div class="flex justify-between">
-                    <span>Subtotal:</span>
-                    <span>\${currency} \${posSuccessModal.subtotal.toLocaleString()}</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span>ITBIS (\${posTaxRate}%):</span>
-                    <span>\${currency} \${posSuccessModal.taxAmount.toLocaleString()}</span>
-                  </div>
-                  <div class="flex justify-between font-black text-red-800 pt-1.5 border-t border-zinc-200">
-                    <span>TOTAL:</span>
-                    <span>\${currency} \${posSuccessModal.grandTotal.toLocaleString()}</span>
-                  </div>
-                </div>
-                <div class="text-center mt-6 pt-4 border-t border-dashed border-zinc-200">
-                  <p class="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">¡Gracias por su compra!</p>
-                  <p class="text-[8px] text-zinc-400 mt-1">Transacción registrada exitosamente.</p>
-                </div>
-              </div>
-            </body>
-          </html>
-        `);
-        pWin.document.close();
-        setTimeout(() => pWin.print(), 500);
-      } else {
-        window.print();
-      }
-    } catch (err) {
-      console.warn("Popup blocked, executing fallback print:", err);
-      window.print();
-    }
-  };
 
   // Handlers
   const handleProductSelectChange = (productId: string) => {
@@ -869,35 +688,6 @@ export default function Billing() {
         </div>
       </div>
 
-      {/* Subtab Navigation Selector */}
-      <div className="flex gap-2 border-b border-zinc-200 pb-0.5 no-print mb-4">
-        <button
-          onClick={() => setBillingSubTab('pos_calculator')}
-          className={cn(
-            "pb-3 px-4 text-xs sm:text-sm font-black border-b-2 transition-all flex items-center gap-2",
-            billingSubTab === 'pos_calculator' 
-              ? "border-red-800 text-red-800" 
-              : "border-transparent text-zinc-500 hover:text-zinc-800"
-          )}
-        >
-          <Boxes className="w-4 h-4 text-red-800" />
-          🛍️ Cálculo y Facturación Almacén
-        </button>
-        <button
-          onClick={() => setBillingSubTab('classic_billing')}
-          className={cn(
-            "pb-3 px-4 text-xs sm:text-sm font-black border-b-2 transition-all flex items-center gap-2",
-            billingSubTab === 'classic_billing' 
-              ? "border-red-800 text-red-800" 
-              : "border-transparent text-zinc-500 hover:text-zinc-800"
-          )}
-        >
-          <FileText className="w-4 h-4" />
-          📄 Factura Formal / Servicios Libres
-        </button>
-      </div>
-
-      {billingSubTab === 'classic_billing' ? (
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
         {/* Editor Form (Left Panel) */}
         <div className="xl:col-span-6 space-y-6">
@@ -1436,20 +1226,6 @@ export default function Billing() {
           </div>
         </div>
       </div>
-      ) : (
-        <PosCalculator 
-          user={user}
-          inventoryItems={inventoryItems}
-          savedInvoices={savedInvoices}
-          setSavedInvoices={setSavedInvoices}
-          currency={currency}
-          issuerName={issuerName}
-          issuerRnc={issuerRnc}
-          issuerAddress={issuerAddress}
-          issuerPhone={issuerPhone}
-          issuerEmail={issuerEmail}
-        />
-      )}
 
       {/* Saved Invoices List History - Real Persistence */}
       <div className="glass-card bg-white p-6 border border-zinc-150 rounded-3xl shadow-sm space-y-6 mt-8 no-print" id="saved-invoices-history-panel">
@@ -1545,10 +1321,26 @@ export default function Billing() {
 
                       <div className="flex items-center gap-1.5 opacity-100 sm:opacity-60 sm:group-hover:opacity-100 transition-opacity">
                         <span className="text-[10px] font-bold text-red-800 hover:underline">Ver / Cargar &rarr;</span>
+                        
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setWhatsAppModalInvoice(inv);
+                            setHistoryShareMessage(null);
+                          }}
+                          className="p-1.5 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors flex items-center justify-center ml-2"
+                          title="Compartir Imagen por WhatsApp"
+                        >
+                          <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12.012 3c-4.965 0-9.01 4.05-9.01 9.01 0 1.583.411 3.125 1.196 4.49l-1.196 4.5 4.603-1.21A8.93 8.93 0 0 0 12.011 21c4.966 0 9.01-4.048 9.01-9.009S16.977 3 12.012 3zm4.992 12.871c-.206.581-1.014 1.135-1.564 1.205-.5.06-1.149.079-1.85-.152-.619-.203-1.5-.544-2.541-1.002-4.414-1.942-7.237-6.526-7.457-6.824-.22-.298-1.782-2.396-1.782-4.572s1.114-3.243 1.513-3.69c.399-.446.879-.558 1.171-.558.292 0 .584.004.839.015.267.012.623-.105.973.743.361.874 1.233 3.033 1.338 3.256.106.223.176.48.028.773-.148.296-.223.479-.444.739-.22.259-.464.577-.662.775-.22.22-.453.46-.195.903.257.442.1.848 1.201 1.838 1.417 1.266 2.613 1.657 2.978 1.838.365.181.579.152.793-.1s.924-1.082 1.174-1.455c.249-.373.499-.311.839-.185.341.127 2.162 1.026 2.536 1.212.373.187.623.277.712.433.09.155.09.897-.116 1.478z"/>
+                          </svg>
+                        </button>
+
                         <button
                           type="button"
                           onClick={(e) => handleDeleteSavedInvoice(inv.id, e)}
-                          className="p-1.5 text-zinc-400 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors ml-2"
+                          className="p-1.5 text-zinc-400 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
                           title="Eliminar de historial"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1562,6 +1354,123 @@ export default function Billing() {
           })()
         )}
       </div>
+
+      {/* WhatsApp Invoice Image Modal for histories */}
+      {whatsAppModalInvoice && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs select-none no-print">
+          <div className="bg-white rounded-3xl border border-zinc-200 max-w-sm w-full p-6 space-y-5 shadow-2xl relative text-center max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-1">
+              <h4 className="text-xs font-black text-zinc-900 uppercase tracking-tight">Compartir por WhatsApp Gráfico</h4>
+              <button 
+                type="button" 
+                onClick={() => setWhatsAppModalInvoice(null)} 
+                className="p-1 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors font-black text-base"
+              >
+                &times;
+              </button>
+            </div>
+
+            <p className="text-[10px] text-zinc-500 leading-normal">
+              A continuación tienes un diseño del tique de compra. Presiona el botón verde para <strong>guardar la imagen</strong> y <strong>copiarla al portapapeles</strong> automáticamente, luego abre WhatsApp para pegarla.
+            </p>
+
+            {/* Este es el contenedor que se convertirá en imagen con html2canvas */}
+            <div 
+              id="history-invoice-capture-card" 
+              className="bg-white border border-zinc-200 p-5 rounded-2xl text-left text-xs space-y-3 shadow-xs select-text text-zinc-900 mx-auto max-w-[320px] w-full block"
+            >
+              <div className="text-center border-b border-dashed border-zinc-200 pb-3 mb-3">
+                <h5 className="font-extrabold text-[13px] tracking-tight uppercase text-zinc-900">
+                  {whatsAppModalInvoice.issuerName || 'Financiera Nova'}
+                </h5>
+                <p className="text-[10px] text-zinc-500">{whatsAppModalInvoice.issuerAddress || 'Santo Domingo, RD'}</p>
+                <p className="text-[9px] text-zinc-400 font-bold">RNC: {whatsAppModalInvoice.issuerRnc || '1-01-88432-1'}</p>
+                <div className="mt-2 inline-block bg-zinc-100 px-2.5 py-1 rounded-md text-[10px] font-mono text-zinc-700 font-bold">
+                  {whatsAppModalInvoice.invoiceNumber}
+                </div>
+              </div>
+
+              <div className="text-[11px] space-y-1 text-zinc-600 border-b border-zinc-100 pb-2">
+                <p><strong>Cliente:</strong> {whatsAppModalInvoice.clientName}</p>
+                {whatsAppModalInvoice.clientRnc && <p><strong>RNC:</strong> {whatsAppModalInvoice.clientRnc}</p>}
+                <p><strong>Fecha:</strong> {whatsAppModalInvoice.issueDate || new Date().toLocaleDateString()}</p>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <div className="flex justify-between text-zinc-400 font-bold text-[9px] uppercase border-b border-zinc-100 pb-1">
+                  <span>Concepto</span>
+                  <span>Total</span>
+                </div>
+                {whatsAppModalInvoice.items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between text-[11px]">
+                    <span className="font-semibold text-zinc-800 truncate max-w-[190px]">{item.quantity}x {item.description}</span>
+                    <span className="font-mono text-zinc-900 font-bold">{whatsAppModalInvoice.currency || 'RD$'} {(item.quantity * item.price).toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t border-dashed border-zinc-200 pt-2.5 mt-2 space-y-1">
+                <div className="flex justify-between text-zinc-500 text-[11px]">
+                  <span>Subtotal:</span>
+                  <span>{whatsAppModalInvoice.currency || 'RD$'} {whatsAppModalInvoice.subtotal.toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between text-zinc-500 text-[11px]">
+                  <span>ITBIS ({whatsAppModalInvoice.taxRate}%):</span>
+                  <span>{whatsAppModalInvoice.currency || 'RD$'} {whatsAppModalInvoice.taxAmount.toLocaleString()}</span>
+                </div>
+                {whatsAppModalInvoice.discount > 0 && (
+                  <div className="flex justify-between text-zinc-500 text-[11px]">
+                    <span>Descuento:</span>
+                    <span>-{whatsAppModalInvoice.currency || 'RD$'} {whatsAppModalInvoice.discount.toLocaleString()}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-black text-red-850 pt-2 border-t border-zinc-100 text-xs">
+                  <span>TOTAL NETO:</span>
+                  <span className="font-mono font-black">{whatsAppModalInvoice.currency || 'RD$'} {whatsAppModalInvoice.grandTotal.toLocaleString()}</span>
+                </div>
+              </div>
+
+              <div className="text-center pt-3 border-t border-dashed border-zinc-200">
+                <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">¡Gracias por su preferencia!</p>
+                <p className="text-[8px] text-zinc-400 mt-1">Soporte: {whatsAppModalInvoice.issuerPhone || whatsAppModalInvoice.issuerEmail}</p>
+              </div>
+            </div>
+
+            {historyShareMessage && (
+              <div className="bg-emerald-50 text-emerald-800 text-[11px] font-bold p-3 rounded-xl border border-emerald-150 py-2">
+                💬 {historyShareMessage}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={isCapturingHistory}
+                onClick={() => handleShareHistoryInvoiceImage(whatsAppModalInvoice)}
+                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-zinc-300 text-white rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 shadow-sm"
+              >
+                {isCapturingHistory ? (
+                  <span className="animate-pulse">Generando Imagen...</span>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4 fill-current text-white" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M12.012 3c-4.965 0-9.01 4.05-9.01 9.01 0 1.583.411 3.125 1.196 4.49l-1.196 4.5 4.603-1.21A8.93 8.93 0 0 0 12.011 21c4.966 0 9.01-4.048 9.01-9.009S16.977 3 12.012 3zm4.992 12.871c-.206.581-1.014 1.135-1.564 1.205-.5.06-1.149.079-1.85-.152-.619-.203-1.5-.544-2.541-1.002-4.414-1.942-7.237-6.526-7.457-6.824-.22-.298-1.782-2.396-1.782-4.572s1.114-3.243 1.513-3.69c.399-.446.879-.558 1.171-.558.292 0 .584.004.839.015.267.012.623-.105.973.743.361.874 1.233 3.033 1.338 3.256.106.223.176.48.028.773-.148.296-.223.479-.444.739-.22.259-.464.577-.662.775-.22.22-.453.46-.195.903.257.442.1.848 1.201 1.838 1.417 1.266 2.613 1.657 2.978 1.838.365.181.579.152.793-.1s.924-1.082 1.174-1.455c.249-.373.499-.311.839-.185.341.127 2.162 1.026 2.536 1.212.373.187.623.277.712.433.09.155.09.897-.116 1.478z"/>
+                    </svg>
+                    Compartir en WhatsApp 💬
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setWhatsAppModalInvoice(null)}
+                className="py-2.5 px-4 bg-zinc-100 hover:bg-zinc-200 text-zinc-800 rounded-xl text-xs font-black transition-all"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
